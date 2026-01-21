@@ -5,6 +5,12 @@ Terminal color theming based on directory - colorizes iTerm2 tabs and background
 ## Installation
 
 ```bash
+cargo install termtint
+```
+
+Or build from source:
+
+```bash
 cargo build --release
 cp target/release/termtint ~/.local/bin/  # or somewhere in your PATH
 ```

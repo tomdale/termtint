@@ -1,7 +1,13 @@
 [package]
 name = "termtint"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Automatically colorize iTerm2 tabs and backgrounds based on directory"
+license = "MIT"
+repository = "https://github.com/tomdale/termtint"
+readme = "README.md"
+keywords = ["iterm2", "terminal", "cli", "color", "theme"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
