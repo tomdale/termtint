@@ -17,10 +17,11 @@ cargo test <test_name>   # Run a single test
 
 ## Architecture
 
-The codebase has four modules:
+The codebase has five modules:
 
-- **main.rs** - CLI entry point using clap. Defines commands: `hook`, `apply`, `reset`
-- **config.rs** - Config file discovery (walks up directory tree) and parsing. Supports three formats: simple hex (`#ff5500`), TOML (`tab = "#ff5500"`), and auto-generated colors
+- **main.rs** - CLI entry point using clap. Defines commands: `hook`, `apply`, `reset`, `init`
+- **config.rs** - Config file discovery (walks up directory tree) and parsing. Supports three formats: simple hex (`#ff5500`), TOML (`tab = "#ff5500"`), and auto-generated colors. Extended color format support via csscolorparser (hex, RGB, HSL, named colors)
+- **init.rs** - Implements the `init` command for creating `.termtint` files
 - **iterm.rs** - Emits iTerm2 OSC escape sequences for tab and background colors
 - **state.rs** - Tracks last applied config in `~/.cache/termtint/last_config` to avoid redundant updates
 
