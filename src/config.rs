@@ -1,3 +1,4 @@
+use csscolorparser;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -22,22 +23,26 @@ impl RGB {
     }
 }
 
-/// Parse a hex color string like "#ff5500" into an RGB struct.
-pub fn parse_hex(s: &str) -> Result<RGB, String> {
+/// Parse a color string in any supported format:
+/// - 6-digit hex: "#ff5500" or "ff5500"
+/// - 3-digit hex: "#f50"
+/// - RGB function: "rgb(255, 85, 0)"
+/// - HSL function: "hsl(20, 100%, 50%)"
+/// - Named colors: "red", "tomato", etc.
+pub fn parse_color(s: &str) -> Result<RGB, String> {
     let s = s.trim();
-    let hex = s.strip_prefix('#').unwrap_or(s);
 
-    if hex.len() != 6 {
-        return Err(format!("Invalid hex color: expected 6 hex digits, got '{}'", s));
-    }
+    // Handle bare 6-digit hex without # prefix for backwards compatibility
+    let normalized = if s.chars().all(|c| c.is_ascii_hexdigit()) && s.len() == 6 {
+        format!("#{}", s)
+    } else {
+        s.to_string()
+    };
 
-    let r = u8::from_str_radix(&hex[0..2], 16)
-        .map_err(|_| format!("Invalid hex color: '{}'", s))?;
-    let g = u8::from_str_radix(&hex[2..4], 16)
-        .map_err(|_| format!("Invalid hex color: '{}'", s))?;
-    let b = u8::from_str_radix(&hex[4..6], 16)
-        .map_err(|_| format!("Invalid hex color: '{}'", s))?;
+    let color = csscolorparser::parse(&normalized)
+        .map_err(|e| format!("Invalid color '{}': {}", s, e))?;
 
+    let [r, g, b, _a] = color.to_rgba8();
     Ok(RGB { r, g, b })
 }
 
@@ -49,7 +54,7 @@ pub struct ColorConfig {
 
 #[derive(Debug, PartialEq)]
 enum ConfigFormat {
-    Hex,
+    SimpleColor,
     Toml,
     Auto,
 }
@@ -57,18 +62,18 @@ enum ConfigFormat {
 /// Detect the format of a config file based on its content.
 fn detect_format(content: &str) -> ConfigFormat {
     let trimmed = content.trim();
-    if trimmed.starts_with('#') || trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        ConfigFormat::Hex
-    } else if trimmed == "auto" {
+    if trimmed == "auto" {
         ConfigFormat::Auto
-    } else {
+    } else if trimmed.contains('=') {
         ConfigFormat::Toml
+    } else {
+        ConfigFormat::SimpleColor
     }
 }
 
-/// Parse a simple hex color file. Derives background at 15% brightness.
-fn parse_simple_hex(content: &str) -> Result<ColorConfig, String> {
-    let tab = parse_hex(content)?;
+/// Parse a simple color file. Derives background at 15% brightness.
+fn parse_simple_color(content: &str) -> Result<ColorConfig, String> {
+    let tab = parse_color(content)?;
     let background = tab.darken(15);
     Ok(ColorConfig { tab, background })
 }
@@ -84,10 +89,10 @@ fn parse_toml(content: &str) -> Result<ColorConfig, String> {
         .and_then(|v| v.as_str())
         .ok_or("Missing 'tab' key in TOML config")?;
 
-    let tab = parse_hex(tab_str)?;
+    let tab = parse_color(tab_str)?;
 
     let background = if let Some(bg_str) = table.get("background").and_then(|v| v.as_str()) {
-        parse_hex(bg_str)?
+        parse_color(bg_str)?
     } else {
         tab.darken(15)
     };
@@ -124,7 +129,7 @@ pub fn parse_config(path: &Path) -> Result<ColorConfig, String> {
         .map_err(|e| format!("Failed to read config file: {}", e))?;
 
     match detect_format(&content) {
-        ConfigFormat::Hex => parse_simple_hex(&content),
+        ConfigFormat::SimpleColor => parse_simple_color(&content),
         ConfigFormat::Toml => parse_toml(&content),
         ConfigFormat::Auto => Ok(parse_auto(path)),
     }
@@ -188,32 +193,80 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_hex_with_hash() {
-        let rgb = parse_hex("#ff5500").unwrap();
+    fn test_parse_color_hex_with_hash() {
+        let rgb = parse_color("#ff5500").unwrap();
         assert_eq!(rgb, RGB { r: 255, g: 85, b: 0 });
     }
 
     #[test]
-    fn test_parse_hex_without_hash() {
-        let rgb = parse_hex("00ff00").unwrap();
+    fn test_parse_color_hex_without_hash() {
+        let rgb = parse_color("00ff00").unwrap();
         assert_eq!(rgb, RGB { r: 0, g: 255, b: 0 });
     }
 
     #[test]
-    fn test_parse_hex_with_whitespace() {
-        let rgb = parse_hex("  #aabbcc  ").unwrap();
+    fn test_parse_color_hex_with_whitespace() {
+        let rgb = parse_color("  #aabbcc  ").unwrap();
         assert_eq!(rgb, RGB { r: 170, g: 187, b: 204 });
     }
 
     #[test]
-    fn test_parse_hex_invalid_length() {
-        let result = parse_hex("#fff");
+    fn test_parse_color_hex_3digit() {
+        let rgb = parse_color("#f50").unwrap();
+        assert_eq!(rgb, RGB { r: 255, g: 85, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_color_hex_3digit_abc() {
+        let rgb = parse_color("#abc").unwrap();
+        assert_eq!(rgb, RGB { r: 170, g: 187, b: 204 });
+    }
+
+    #[test]
+    fn test_parse_color_rgb_function() {
+        let rgb = parse_color("rgb(255, 85, 0)").unwrap();
+        assert_eq!(rgb, RGB { r: 255, g: 85, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_color_hsl_function() {
+        let rgb = parse_color("hsl(20, 100%, 50%)").unwrap();
+        assert_eq!(rgb, RGB { r: 255, g: 85, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_color_hsl_red() {
+        let rgb = parse_color("hsl(0, 100%, 50%)").unwrap();
+        assert_eq!(rgb, RGB { r: 255, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_color_hsl_green() {
+        let rgb = parse_color("hsl(120, 100%, 50%)").unwrap();
+        assert_eq!(rgb, RGB { r: 0, g: 255, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_color_named_red() {
+        let rgb = parse_color("red").unwrap();
+        assert_eq!(rgb, RGB { r: 255, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_color_named_tomato() {
+        let rgb = parse_color("tomato").unwrap();
+        assert_eq!(rgb, RGB { r: 255, g: 99, b: 71 });
+    }
+
+    #[test]
+    fn test_parse_color_invalid() {
+        let result = parse_color("#gggggg");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_parse_hex_invalid_chars() {
-        let result = parse_hex("#gggggg");
+    fn test_parse_color_invalid_notacolor() {
+        let result = parse_color("notacolor");
         assert!(result.is_err());
     }
 
@@ -232,13 +285,13 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_format_hex_with_hash() {
-        assert_eq!(detect_format("#ff5500"), ConfigFormat::Hex);
+    fn test_detect_format_simple_color_with_hash() {
+        assert_eq!(detect_format("#ff5500"), ConfigFormat::SimpleColor);
     }
 
     #[test]
-    fn test_detect_format_hex_without_hash() {
-        assert_eq!(detect_format("ff5500"), ConfigFormat::Hex);
+    fn test_detect_format_simple_color_without_hash() {
+        assert_eq!(detect_format("ff5500"), ConfigFormat::SimpleColor);
     }
 
     #[test]
@@ -253,8 +306,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_simple_hex_config() {
-        let config = parse_simple_hex("#ff5500").unwrap();
+    fn test_detect_format_named_color() {
+        assert_eq!(detect_format("red"), ConfigFormat::SimpleColor);
+        assert_eq!(detect_format("tomato"), ConfigFormat::SimpleColor);
+    }
+
+    #[test]
+    fn test_parse_simple_color_config() {
+        let config = parse_simple_color("#ff5500").unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 85, b: 0 });
         assert_eq!(config.background, RGB { r: 38, g: 12, b: 0 });
     }
@@ -277,6 +336,20 @@ mod tests {
     fn test_parse_toml_missing_tab() {
         let result = parse_toml("background = \"#001100\"");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_toml_with_hsl() {
+        let config = parse_toml("tab = \"hsl(0, 100%, 50%)\"").unwrap();
+        assert_eq!(config.tab, RGB { r: 255, g: 0, b: 0 });
+        assert_eq!(config.background, RGB { r: 38, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_toml_with_named_color() {
+        let config = parse_toml("tab = \"tomato\"").unwrap();
+        assert_eq!(config.tab, RGB { r: 255, g: 99, b: 71 });
+        assert_eq!(config.background, RGB { r: 38, g: 14, b: 10 });
     }
 
     #[test]
