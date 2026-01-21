@@ -1,4 +1,5 @@
 use csscolorparser;
+use oklab::{oklab_to_srgb, srgb_to_oklab, Oklab, Rgb};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -12,13 +13,29 @@ pub struct RGB {
 }
 
 impl RGB {
-    /// Create a darkened version of this color by the given percentage.
-    /// A percent of 15 means the result will be 15% of the original brightness.
-    pub fn darken(&self, percent: u8) -> RGB {
+    /// Create a darkened version using perceptually uniform Oklab color space.
+    /// target_lightness is the desired fraction of original lightness (0.0 to 1.0).
+    pub fn darken(&self, target_lightness: f32) -> RGB {
+        // Convert to Oklab (the crate handles sRGB u8 conversion)
+        let srgb = Rgb {
+            r: self.r,
+            g: self.g,
+            b: self.b,
+        };
+
+        // Convert to Oklab, reduce lightness, convert back
+        let oklab = srgb_to_oklab(srgb);
+        let darkened_oklab = Oklab {
+            l: oklab.l * target_lightness,
+            a: oklab.a,
+            b: oklab.b,
+        };
+        let darkened_srgb = oklab_to_srgb(darkened_oklab);
+
         RGB {
-            r: (self.r as u16 * percent as u16 / 100) as u8,
-            g: (self.g as u16 * percent as u16 / 100) as u8,
-            b: (self.b as u16 * percent as u16 / 100) as u8,
+            r: darkened_srgb.r,
+            g: darkened_srgb.g,
+            b: darkened_srgb.b,
         }
     }
 }
@@ -74,7 +91,7 @@ fn detect_format(content: &str) -> ConfigFormat {
 /// Parse a simple color file. Derives background at 15% brightness.
 fn parse_simple_color(content: &str) -> Result<ColorConfig, String> {
     let tab = parse_color(content)?;
-    let background = tab.darken(15);
+    let background = tab.darken(0.15);
     Ok(ColorConfig { tab, background })
 }
 
@@ -94,7 +111,7 @@ fn parse_toml(content: &str) -> Result<ColorConfig, String> {
     let background = if let Some(bg_str) = table.get("background").and_then(|v| v.as_str()) {
         parse_color(bg_str)?
     } else {
-        tab.darken(15)
+        tab.darken(0.15)
     };
 
     Ok(ColorConfig { tab, background })
@@ -118,7 +135,7 @@ fn parse_auto(path: &Path) -> ColorConfig {
         g: g.max(64),
         b: b.max(64),
     };
-    let background = tab.darken(15);
+    let background = tab.darken(0.15);
 
     ColorConfig { tab, background }
 }
@@ -273,15 +290,17 @@ mod tests {
     #[test]
     fn test_rgb_darken() {
         let rgb = RGB { r: 100, g: 200, b: 50 };
-        let darkened = rgb.darken(50);
-        assert_eq!(darkened, RGB { r: 50, g: 100, b: 25 });
+        let darkened = rgb.darken(0.50);
+        // With Oklab perceptual darkening, 50% lightness preserves hue
+        assert_eq!(darkened, RGB { r: 0, g: 84, b: 0 });
     }
 
     #[test]
     fn test_rgb_darken_15_percent() {
         let rgb = RGB { r: 255, g: 85, b: 0 };
-        let darkened = rgb.darken(15);
-        assert_eq!(darkened, RGB { r: 38, g: 12, b: 0 });
+        let darkened = rgb.darken(0.15);
+        // With Oklab perceptual darkening, 15% lightness preserves hue better
+        assert_eq!(darkened, RGB { r: 48, g: 0, b: 0 });
     }
 
     #[test]
@@ -315,14 +334,14 @@ mod tests {
     fn test_parse_simple_color_config() {
         let config = parse_simple_color("#ff5500").unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 85, b: 0 });
-        assert_eq!(config.background, RGB { r: 38, g: 12, b: 0 });
+        assert_eq!(config.background, RGB { r: 48, g: 0, b: 0 });
     }
 
     #[test]
     fn test_parse_toml_with_tab_only() {
         let config = parse_toml("tab = \"#00ff00\"").unwrap();
         assert_eq!(config.tab, RGB { r: 0, g: 255, b: 0 });
-        assert_eq!(config.background, RGB { r: 0, g: 38, b: 0 });
+        assert_eq!(config.background, RGB { r: 0, g: 21, b: 0 });
     }
 
     #[test]
@@ -342,14 +361,14 @@ mod tests {
     fn test_parse_toml_with_hsl() {
         let config = parse_toml("tab = \"hsl(0, 100%, 50%)\"").unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 0, b: 0 });
-        assert_eq!(config.background, RGB { r: 38, g: 0, b: 0 });
+        assert_eq!(config.background, RGB { r: 54, g: 0, b: 0 });
     }
 
     #[test]
     fn test_parse_toml_with_named_color() {
         let config = parse_toml("tab = \"tomato\"").unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 99, b: 71 });
-        assert_eq!(config.background, RGB { r: 38, g: 14, b: 10 });
+        assert_eq!(config.background, RGB { r: 46, g: 0, b: 0 });
     }
 
     #[test]
