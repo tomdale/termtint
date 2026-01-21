@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+csscolorparser = { version = "0.7", features = ["named-colors"] }
 toml = "0.8"
 
 [dev-dependencies]

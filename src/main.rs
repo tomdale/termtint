@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod config;
+mod init;
 mod iterm;
 mod state;
 
@@ -23,9 +24,22 @@ enum Commands {
     Apply,
     /// Reset terminal colors to default
     Reset,
+    /// Initialize a .termtint file in the current directory
+    Init {
+        /// Hex color for the tab (e.g., #ff5500)
+        color: Option<String>,
+        /// Custom background color (hex)
+        #[arg(long)]
+        background: Option<String>,
+        /// Overwrite existing .termtint file
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 fn cmd_apply() {
+    state::cleanup_stale_sessions();
+
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -99,6 +113,16 @@ fn main() {
         }
         Commands::Reset => {
             cmd_reset();
+        }
+        Commands::Init {
+            color,
+            background,
+            force,
+        } => {
+            if let Err(e) = init::cmd_init(color, background, force) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
         }
     }
 }
