@@ -21,7 +21,11 @@ enum Commands {
         shell: String,
     },
     /// Apply colors from config
-    Apply,
+    Apply {
+        /// Enable verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Reset terminal colors to default
     Reset,
     /// Initialize a .termtint file in the current directory
@@ -37,7 +41,7 @@ enum Commands {
     },
 }
 
-fn cmd_apply() {
+fn cmd_apply(verbose: bool) {
     state::cleanup_stale_sessions();
 
     let current_dir = match std::env::current_dir() {
@@ -49,18 +53,35 @@ fn cmd_apply() {
     };
 
     let config_path = config::find_config(&current_dir);
-    let last_config_path = state::read_last_config_path();
+    let last_state = state::read_last_config_state();
 
-    match (&config_path, &last_config_path) {
-        // Same config file, no change needed
-        (Some(current), Some(last)) if current == last => {}
+    // Build current state if we have a config
+    let current_state = config_path.as_ref().and_then(|path| {
+        state::get_file_mtime(path).map(|mtime| state::ConfigState {
+            path: path.clone(),
+            mtime,
+        })
+    });
+
+    match (&current_state, &last_state) {
+        // Same config file and unchanged, no change needed
+        (Some(current), Some(last)) if current == last => {
+            if verbose {
+                if let Ok(color_config) = config::parse_config(&current.path) {
+                    eprintln!("termtint: tab={} background={} (unchanged)", color_config.tab, color_config.background);
+                }
+            }
+        }
 
         // Found a config file (new or changed)
-        (Some(path), _) => {
-            match config::parse_config(path) {
+        (Some(current), _) => {
+            match config::parse_config(&current.path) {
                 Ok(color_config) => {
+                    if verbose {
+                        eprintln!("termtint: tab={} background={}", color_config.tab, color_config.background);
+                    }
                     iterm::apply_colors(&color_config);
-                    state::write_last_config_path(Some(path));
+                    state::write_last_config_state(Some(current));
                 }
                 Err(e) => {
                     eprintln!("Error parsing config: {}", e);
@@ -70,18 +91,25 @@ fn cmd_apply() {
 
         // No config found, but had one before - reset colors
         (None, Some(_)) => {
+            if verbose {
+                eprintln!("termtint: reset (no config)");
+            }
             iterm::reset_colors();
-            state::write_last_config_path(None);
+            state::write_last_config_state(None);
         }
 
         // No config found and none before - nothing to do
-        (None, None) => {}
+        (None, None) => {
+            if verbose {
+                eprintln!("termtint: no config found");
+            }
+        }
     }
 }
 
 fn cmd_reset() {
     iterm::reset_colors();
-    state::write_last_config_path(None);
+    state::write_last_config_state(None);
 }
 
 fn cmd_hook(shell: &str) {
@@ -108,8 +136,8 @@ fn main() {
         Commands::Hook { shell } => {
             cmd_hook(&shell);
         }
-        Commands::Apply => {
-            cmd_apply();
+        Commands::Apply { verbose } => {
+            cmd_apply(verbose);
         }
         Commands::Reset => {
             cmd_reset();

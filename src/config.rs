@@ -1,6 +1,7 @@
 use csscolorparser;
 use oklab::{oklab_to_srgb, srgb_to_oklab, Oklab, Rgb};
 use std::collections::hash_map::DefaultHasher;
+use std::fmt;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -37,6 +38,12 @@ impl RGB {
             g: darkened_srgb.g,
             b: darkened_srgb.b,
         }
+    }
+}
+
+impl fmt::Display for RGB {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 }
 
@@ -124,17 +131,21 @@ fn parse_auto(path: &Path) -> ColorConfig {
     canonical.hash(&mut hasher);
     let hash = hasher.finish();
 
-    // Use hash bytes to generate a vibrant color
-    let r = ((hash >> 0) & 0xFF) as u8;
-    let g = ((hash >> 8) & 0xFF) as u8;
-    let b = ((hash >> 16) & 0xFF) as u8;
+    // Use HSL color space for vibrant colors
+    // Derive hue from hash for variety (0.0 to 360.0)
+    let hue = ((hash & 0xFFFF) as f32 / 0xFFFF as f32) * 360.0;
 
-    // Ensure minimum brightness for visibility
-    let tab = RGB {
-        r: r.max(64),
-        g: g.max(64),
-        b: b.max(64),
-    };
+    // Use high saturation (0.7 to 0.9) for vibrant colors
+    let saturation = 0.7 + ((hash >> 16) & 0xFF) as f32 / 0xFF as f32 * 0.2;
+
+    // Use medium lightness (0.5 to 0.6) for visible, bright colors
+    let lightness = 0.5 + ((hash >> 24) & 0xFF) as f32 / 0xFF as f32 * 0.1;
+
+    // Create color using HSL and convert to RGB
+    let color = csscolorparser::Color::from_hsla(hue, saturation, lightness, 1.0);
+    let [r, g, b, _a] = color.to_rgba8();
+
+    let tab = RGB { r, g, b };
     let background = tab.darken(0.15);
 
     ColorConfig { tab, background }
@@ -383,6 +394,72 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_auto_produces_vibrant_colors() {
+        // Test multiple different paths to ensure vibrancy constraints hold
+        let temp = TempDir::new().unwrap();
+
+        let test_paths = vec![
+            temp.path().join("project1").join(".termtint"),
+            temp.path().join("project2").join(".termtint"),
+            temp.path().join("project3").join(".termtint"),
+            temp.path().join("deeply").join("nested").join("path").join(".termtint"),
+        ];
+
+        for path in test_paths {
+            // Create parent directories
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&path, "auto").unwrap();
+
+            let config = parse_auto(&path);
+            let rgb = config.tab;
+
+            // Convert RGB back to HSL to verify constraints
+            // Using csscolorparser to convert back
+            let color_str = format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b);
+            let color = csscolorparser::parse(&color_str).unwrap();
+            let [_hue, saturation, lightness, _alpha] = color.to_hsla();
+
+            // Verify saturation is >= 0.7 (high saturation for vibrant colors)
+            assert!(
+                saturation >= 0.7,
+                "Path {:?} generated color {} with saturation {}, expected >= 0.7",
+                path,
+                color_str,
+                saturation
+            );
+
+            // Verify saturation is <= 0.9 (upper bound from implementation)
+            assert!(
+                saturation <= 0.9,
+                "Path {:?} generated color {} with saturation {}, expected <= 0.9",
+                path,
+                color_str,
+                saturation
+            );
+
+            // Verify lightness is >= 0.5 (medium lightness for visible colors)
+            assert!(
+                lightness >= 0.5,
+                "Path {:?} generated color {} with lightness {}, expected >= 0.5",
+                path,
+                color_str,
+                lightness
+            );
+
+            // Verify lightness is <= 0.6 (upper bound from implementation)
+            assert!(
+                lightness <= 0.6,
+                "Path {:?} generated color {} with lightness {}, expected <= 0.6",
+                path,
+                color_str,
+                lightness
+            );
+        }
+    }
+
+    #[test]
     fn test_parse_config_hex_file() {
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join(".termtint");
@@ -409,7 +486,17 @@ mod tests {
         fs::write(&config_path, "auto").unwrap();
 
         let config = parse_config(&config_path).unwrap();
-        // Auto generates colors, just verify it doesn't error
-        assert!(config.tab.r >= 64);
+        // Auto generates vibrant colors using HSL, verify at least one channel is bright
+        let max_channel = config.tab.r.max(config.tab.g).max(config.tab.b);
+        assert!(max_channel >= 128, "Generated color should be vibrant with at least one bright channel");
+    }
+
+    #[test]
+    fn test_rgb_display() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        assert_eq!(format!("{}", rgb), "#ff5500");
+
+        let rgb = RGB { r: 0, g: 17, b: 255 };
+        assert_eq!(format!("{}", rgb), "#0011ff");
     }
 }

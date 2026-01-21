@@ -45,18 +45,40 @@ fn state_file_path() -> PathBuf {
         .join("last_config")
 }
 
-/// Read the last config file path from state, if any.
-pub fn read_last_config_path() -> Option<PathBuf> {
-    let state_path = state_file_path();
-    fs::read_to_string(&state_path)
-        .ok()
-        .map(|s| PathBuf::from(s.trim()))
-        .filter(|p| !p.as_os_str().is_empty())
+/// State info for the last applied config.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigState {
+    pub path: PathBuf,
+    pub mtime: u64,
 }
 
-/// Write the current config file path to state.
+/// Read the last config state from disk, if any.
+pub fn read_last_config_state() -> Option<ConfigState> {
+    let state_path = state_file_path();
+    let content = fs::read_to_string(&state_path).ok()?;
+    let mut lines = content.lines();
+    let path = PathBuf::from(lines.next()?.trim());
+    let mtime = lines.next()?.trim().parse().ok()?;
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    Some(ConfigState { path, mtime })
+}
+
+/// Get the modification time of a file as seconds since epoch.
+pub fn get_file_mtime(path: &std::path::Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
+/// Write the current config state to disk.
 /// Pass None to clear the state (when leaving a termtint project).
-pub fn write_last_config_path(path: Option<&std::path::Path>) {
+pub fn write_last_config_state(state: Option<&ConfigState>) {
     let state_path = state_file_path();
 
     // Ensure parent directory exists
@@ -64,9 +86,10 @@ pub fn write_last_config_path(path: Option<&std::path::Path>) {
         let _ = fs::create_dir_all(parent);
     }
 
-    match path {
-        Some(p) => {
-            let _ = fs::write(&state_path, p.to_string_lossy().as_bytes());
+    match state {
+        Some(s) => {
+            let content = format!("{}\n{}", s.path.to_string_lossy(), s.mtime);
+            let _ = fs::write(&state_path, content.as_bytes());
         }
         None => {
             let _ = fs::remove_file(&state_path);
