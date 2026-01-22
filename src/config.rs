@@ -1,5 +1,7 @@
+use crate::user_config::UserConfig;
 use csscolorparser;
 use oklab::{oklab_to_srgb, srgb_to_oklab, Oklab, Rgb};
+use rand::Rng;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::fs;
@@ -14,9 +16,9 @@ pub struct RGB {
 }
 
 impl RGB {
-    /// Create a darkened version using perceptually uniform Oklab color space.
-    /// target_lightness is the desired fraction of original lightness (0.0 to 1.0).
-    pub fn darken(&self, target_lightness: f32) -> RGB {
+    /// Create a version with a fixed lightness using perceptually uniform Oklab color space.
+    /// Preserves hue and chroma while setting the lightness to the target value.
+    pub fn with_lightness(&self, target_lightness: f32) -> RGB {
         // Convert to Oklab (the crate handles sRGB u8 conversion)
         let srgb = Rgb {
             r: self.r,
@@ -24,19 +26,19 @@ impl RGB {
             b: self.b,
         };
 
-        // Convert to Oklab, reduce lightness, convert back
+        // Convert to Oklab, set lightness to target, convert back
         let oklab = srgb_to_oklab(srgb);
-        let darkened_oklab = Oklab {
-            l: oklab.l * target_lightness,
+        let modified_oklab = Oklab {
+            l: target_lightness.clamp(0.0, 1.0),
             a: oklab.a,
             b: oklab.b,
         };
-        let darkened_srgb = oklab_to_srgb(darkened_oklab);
+        let modified_srgb = oklab_to_srgb(modified_oklab);
 
         RGB {
-            r: darkened_srgb.r,
-            g: darkened_srgb.g,
-            b: darkened_srgb.b,
+            r: modified_srgb.r,
+            g: modified_srgb.g,
+            b: modified_srgb.b,
         }
     }
 }
@@ -44,6 +46,16 @@ impl RGB {
 impl fmt::Display for RGB {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+}
+
+impl RGB {
+    /// Format as a colored unicode block using ANSI true color escape sequences.
+    pub fn as_color_block(&self) -> String {
+        format!(
+            "\x1b[48;2;{};{};{}m  \x1b[0m",
+            self.r, self.g, self.b
+        )
     }
 }
 
@@ -76,6 +88,15 @@ pub struct ColorConfig {
     pub background: RGB,
 }
 
+/// Represents the source of a color configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigSource {
+    /// Explicit .termtint file found
+    Termtint(PathBuf),
+    /// Directory with a trigger file (e.g., Cargo.toml, package.json)
+    TriggerFile(String),
+}
+
 #[derive(Debug, PartialEq)]
 enum ConfigFormat {
     SimpleColor,
@@ -95,15 +116,15 @@ fn detect_format(content: &str) -> ConfigFormat {
     }
 }
 
-/// Parse a simple color file. Derives background at 15% brightness.
-fn parse_simple_color(content: &str) -> Result<ColorConfig, String> {
+/// Parse a simple color file. Derives background using configured lightness.
+fn parse_simple_color(content: &str, user_config: &UserConfig) -> Result<ColorConfig, String> {
     let tab = parse_color(content)?;
-    let background = tab.darken(0.15);
+    let background = tab.with_lightness(user_config.background_lightness);
     Ok(ColorConfig { tab, background })
 }
 
 /// Parse a TOML config file.
-fn parse_toml(content: &str) -> Result<ColorConfig, String> {
+fn parse_toml(content: &str, user_config: &UserConfig) -> Result<ColorConfig, String> {
     let table: toml::Table = content
         .parse()
         .map_err(|e| format!("Failed to parse TOML: {}", e))?;
@@ -118,60 +139,97 @@ fn parse_toml(content: &str) -> Result<ColorConfig, String> {
     let background = if let Some(bg_str) = table.get("background").and_then(|v| v.as_str()) {
         parse_color(bg_str)?
     } else {
-        tab.darken(0.15)
+        tab.with_lightness(user_config.background_lightness)
     };
 
     Ok(ColorConfig { tab, background })
 }
 
-/// Generate a deterministic color from the config file path.
-fn parse_auto(path: &Path) -> ColorConfig {
+/// Generate a deterministic color from the config file path using user-configured parameters.
+fn parse_auto(path: &Path, user_config: &UserConfig) -> ColorConfig {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     let hash = hasher.finish();
 
     // Use HSL color space for vibrant colors
-    // Derive hue from hash for variety (0.0 to 360.0)
-    let hue = ((hash & 0xFFFF) as f32 / 0xFFFF as f32) * 360.0;
+    // Derive hue from hash within configured range
+    let hue_range = user_config.hue_max - user_config.hue_min;
+    let hue = user_config.hue_min + ((hash & 0xFFFF) as f32 / 0xFFFF as f32) * hue_range;
 
-    // Use high saturation (0.7 to 0.9) for vibrant colors
-    let saturation = 0.7 + ((hash >> 16) & 0xFF) as f32 / 0xFF as f32 * 0.2;
+    // Use configured saturation range
+    let saturation_range = user_config.saturation_max - user_config.saturation_min;
+    let saturation = user_config.saturation_min + ((hash >> 16) & 0xFF) as f32 / 0xFF as f32 * saturation_range;
 
-    // Use medium lightness (0.5 to 0.6) for visible, bright colors
-    let lightness = 0.5 + ((hash >> 24) & 0xFF) as f32 / 0xFF as f32 * 0.1;
+    // Use configured fixed lightness
+    let lightness = user_config.lightness;
 
     // Create color using HSL and convert to RGB
     let color = csscolorparser::Color::from_hsla(hue, saturation, lightness, 1.0);
     let [r, g, b, _a] = color.to_rgba8();
 
     let tab = RGB { r, g, b };
-    let background = tab.darken(0.15);
+    let background = tab.with_lightness(user_config.background_lightness);
 
     ColorConfig { tab, background }
 }
 
+/// Generate a random color using user-configured parameters.
+pub fn generate_random_color(user_config: &UserConfig) -> RGB {
+    let mut rng = rand::thread_rng();
+    let random_value = rng.gen::<u64>();
+
+    // Use HSL color space for vibrant colors
+    // Derive hue from random value within configured range
+    let hue_range = user_config.hue_max - user_config.hue_min;
+    let hue = user_config.hue_min + ((random_value & 0xFFFF) as f32 / 0xFFFF as f32) * hue_range;
+
+    // Use configured saturation range
+    let saturation_range = user_config.saturation_max - user_config.saturation_min;
+    let saturation = user_config.saturation_min + ((random_value >> 16) & 0xFF) as f32 / 0xFF as f32 * saturation_range;
+
+    // Use configured fixed lightness
+    let lightness = user_config.lightness;
+
+    // Create color using HSL and convert to RGB
+    let color = csscolorparser::Color::from_hsla(hue, saturation, lightness, 1.0);
+    let [r, g, b, _a] = color.to_rgba8();
+
+    RGB { r, g, b }
+}
+
 /// Parse a config file at the given path.
-pub fn parse_config(path: &Path) -> Result<ColorConfig, String> {
+pub fn parse_config(path: &Path, user_config: &UserConfig) -> Result<ColorConfig, String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read config file: {}", e))?;
 
     match detect_format(&content) {
-        ConfigFormat::SimpleColor => parse_simple_color(&content),
-        ConfigFormat::Toml => parse_toml(&content),
-        ConfigFormat::Auto => Ok(parse_auto(path)),
+        ConfigFormat::SimpleColor => parse_simple_color(&content, user_config),
+        ConfigFormat::Toml => parse_toml(&content, user_config),
+        ConfigFormat::Auto => Ok(parse_auto(path, user_config)),
     }
 }
 
-/// Find the nearest `.termtint` config file by walking up from start_dir.
-/// Returns the path to the config file if found, None otherwise.
-pub fn find_config(start_dir: &Path) -> Option<PathBuf> {
+/// Find a configuration source by walking up from start_dir.
+/// First checks for explicit `.termtint` files (highest priority),
+/// then checks for trigger files defined in user_config.
+/// Returns ConfigSource describing where the config comes from, or None if nothing found.
+pub fn find_config_source(start_dir: &Path, user_config: &UserConfig) -> Option<ConfigSource> {
     let mut current = start_dir.to_path_buf();
 
     loop {
-        let config_path = current.join(".termtint");
-        if config_path.exists() {
-            return Some(config_path);
+        // First priority: check for explicit .termtint file
+        let termtint_path = current.join(".termtint");
+        if termtint_path.exists() {
+            return Some(ConfigSource::Termtint(termtint_path));
+        }
+
+        // Second priority: check for any trigger files
+        for trigger_file in &user_config.trigger_files {
+            let trigger_path = current.join(trigger_file);
+            if trigger_path.exists() {
+                return Some(ConfigSource::TriggerFile(current.to_string_lossy().to_string()));
+            }
         }
 
         if !current.pop() {
@@ -181,44 +239,25 @@ pub fn find_config(start_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Parse a config from a ConfigSource.
+/// For Termtint sources, reads and parses the .termtint file.
+/// For TriggerFile sources, generates an auto color based on the directory path.
+pub fn parse_config_source(source: &ConfigSource, user_config: &UserConfig) -> Result<ColorConfig, String> {
+    match source {
+        ConfigSource::Termtint(path) => parse_config(path, user_config),
+        ConfigSource::TriggerFile(dir_path) => {
+            // Generate auto color based on directory path
+            let dir = PathBuf::from(dir_path);
+            Ok(parse_auto(&dir, user_config))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::{self, File};
     use tempfile::TempDir;
-
-    #[test]
-    fn test_config_in_current_dir() {
-        let temp = TempDir::new().unwrap();
-        let config_path = temp.path().join(".termtint");
-        File::create(&config_path).unwrap();
-
-        let result = find_config(temp.path());
-        assert_eq!(result, Some(config_path));
-    }
-
-    #[test]
-    fn test_config_in_parent_dir() {
-        let temp = TempDir::new().unwrap();
-        let config_path = temp.path().join(".termtint");
-        File::create(&config_path).unwrap();
-
-        let child_dir = temp.path().join("child");
-        fs::create_dir(&child_dir).unwrap();
-
-        let result = find_config(&child_dir);
-        assert_eq!(result, Some(config_path));
-    }
-
-    #[test]
-    fn test_no_config_found() {
-        let temp = TempDir::new().unwrap();
-        let child_dir = temp.path().join("child");
-        fs::create_dir(&child_dir).unwrap();
-
-        let result = find_config(&child_dir);
-        assert_eq!(result, None);
-    }
 
     #[test]
     fn test_parse_color_hex_with_hash() {
@@ -299,19 +338,19 @@ mod tests {
     }
 
     #[test]
-    fn test_rgb_darken() {
+    fn test_rgb_with_lightness() {
         let rgb = RGB { r: 100, g: 200, b: 50 };
-        let darkened = rgb.darken(0.50);
-        // With Oklab perceptual darkening, 50% lightness preserves hue
-        assert_eq!(darkened, RGB { r: 0, g: 84, b: 0 });
+        let darkened = rgb.with_lightness(0.10);
+        // Setting Oklab lightness to 0.10 preserves hue
+        assert_eq!(darkened, RGB { r: 0, g: 9, b: 0 });
     }
 
     #[test]
-    fn test_rgb_darken_15_percent() {
+    fn test_rgb_with_lightness_different_value() {
         let rgb = RGB { r: 255, g: 85, b: 0 };
-        let darkened = rgb.darken(0.15);
-        // With Oklab perceptual darkening, 15% lightness preserves hue better
-        assert_eq!(darkened, RGB { r: 48, g: 0, b: 0 });
+        let darkened = rgb.with_lightness(0.15);
+        // Setting Oklab lightness to 0.15 preserves hue
+        assert_eq!(darkened, RGB { r: 66, g: 0, b: 0 });
     }
 
     #[test]
@@ -343,59 +382,71 @@ mod tests {
 
     #[test]
     fn test_parse_simple_color_config() {
-        let config = parse_simple_color("#ff5500").unwrap();
+        let user_config = UserConfig::default();
+        let config = parse_simple_color("#ff5500", &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 85, b: 0 });
+        // Background uses fixed lightness (0.10 by default)
         assert_eq!(config.background, RGB { r: 48, g: 0, b: 0 });
     }
 
     #[test]
     fn test_parse_toml_with_tab_only() {
-        let config = parse_toml("tab = \"#00ff00\"").unwrap();
+        let user_config = UserConfig::default();
+        let config = parse_toml("tab = \"#00ff00\"", &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 0, g: 255, b: 0 });
-        assert_eq!(config.background, RGB { r: 0, g: 21, b: 0 });
+        // Background uses fixed lightness (0.10 by default)
+        assert_eq!(config.background, RGB { r: 0, g: 13, b: 0 });
     }
 
     #[test]
     fn test_parse_toml_with_background() {
-        let config = parse_toml("tab = \"#00ff00\"\nbackground = \"#001100\"").unwrap();
+        let user_config = UserConfig::default();
+        let config = parse_toml("tab = \"#00ff00\"\nbackground = \"#001100\"", &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 0, g: 255, b: 0 });
         assert_eq!(config.background, RGB { r: 0, g: 17, b: 0 });
     }
 
     #[test]
     fn test_parse_toml_missing_tab() {
-        let result = parse_toml("background = \"#001100\"");
+        let user_config = UserConfig::default();
+        let result = parse_toml("background = \"#001100\"", &user_config);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_parse_toml_with_hsl() {
-        let config = parse_toml("tab = \"hsl(0, 100%, 50%)\"").unwrap();
+        let user_config = UserConfig::default();
+        let config = parse_toml("tab = \"hsl(0, 100%, 50%)\"", &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 0, b: 0 });
-        assert_eq!(config.background, RGB { r: 54, g: 0, b: 0 });
+        // Background uses fixed lightness (0.10 by default)
+        assert_eq!(config.background, RGB { r: 56, g: 0, b: 0 });
     }
 
     #[test]
     fn test_parse_toml_with_named_color() {
-        let config = parse_toml("tab = \"tomato\"").unwrap();
+        let user_config = UserConfig::default();
+        let config = parse_toml("tab = \"tomato\"", &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 99, b: 71 });
-        assert_eq!(config.background, RGB { r: 46, g: 0, b: 0 });
+        // Background uses fixed lightness (0.10 by default)
+        assert_eq!(config.background, RGB { r: 44, g: 0, b: 0 });
     }
 
     #[test]
     fn test_parse_auto_deterministic() {
+        let user_config = UserConfig::default();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join(".termtint");
         fs::write(&config_path, "auto").unwrap();
 
-        let config1 = parse_auto(&config_path);
-        let config2 = parse_auto(&config_path);
+        let config1 = parse_auto(&config_path, &user_config);
+        let config2 = parse_auto(&config_path, &user_config);
         assert_eq!(config1, config2);
     }
 
     #[test]
     fn test_parse_auto_produces_vibrant_colors() {
         // Test multiple different paths to ensure vibrancy constraints hold
+        let user_config = UserConfig::default();
         let temp = TempDir::new().unwrap();
 
         let test_paths = vec![
@@ -412,7 +463,7 @@ mod tests {
             }
             fs::write(&path, "auto").unwrap();
 
-            let config = parse_auto(&path);
+            let config = parse_auto(&path, &user_config);
             let rgb = config.tab;
 
             // Convert RGB back to HSL to verify constraints
@@ -439,53 +490,50 @@ mod tests {
                 saturation
             );
 
-            // Verify lightness is >= 0.5 (medium lightness for visible colors)
+            // Verify lightness is approximately the configured value (0.55 default)
+            // Allow small tolerance for floating point/color space conversion
+            let expected_lightness = user_config.lightness;
             assert!(
-                lightness >= 0.5,
-                "Path {:?} generated color {} with lightness {}, expected >= 0.5",
+                (lightness - expected_lightness).abs() < 0.02,
+                "Path {:?} generated color {} with lightness {}, expected ~{}",
                 path,
                 color_str,
-                lightness
-            );
-
-            // Verify lightness is <= 0.6 (upper bound from implementation)
-            assert!(
-                lightness <= 0.6,
-                "Path {:?} generated color {} with lightness {}, expected <= 0.6",
-                path,
-                color_str,
-                lightness
+                lightness,
+                expected_lightness
             );
         }
     }
 
     #[test]
     fn test_parse_config_hex_file() {
+        let user_config = UserConfig::default();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join(".termtint");
         fs::write(&config_path, "#ff5500").unwrap();
 
-        let config = parse_config(&config_path).unwrap();
+        let config = parse_config(&config_path, &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 255, g: 85, b: 0 });
     }
 
     #[test]
     fn test_parse_config_toml_file() {
+        let user_config = UserConfig::default();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join(".termtint");
         fs::write(&config_path, "tab = \"#00ff00\"").unwrap();
 
-        let config = parse_config(&config_path).unwrap();
+        let config = parse_config(&config_path, &user_config).unwrap();
         assert_eq!(config.tab, RGB { r: 0, g: 255, b: 0 });
     }
 
     #[test]
     fn test_parse_config_auto_file() {
+        let user_config = UserConfig::default();
         let temp = TempDir::new().unwrap();
         let config_path = temp.path().join(".termtint");
         fs::write(&config_path, "auto").unwrap();
 
-        let config = parse_config(&config_path).unwrap();
+        let config = parse_config(&config_path, &user_config).unwrap();
         // Auto generates vibrant colors using HSL, verify at least one channel is bright
         let max_channel = config.tab.r.max(config.tab.g).max(config.tab.b);
         assert!(max_channel >= 128, "Generated color should be vibrant with at least one bright channel");
@@ -498,5 +546,288 @@ mod tests {
 
         let rgb = RGB { r: 0, g: 17, b: 255 };
         assert_eq!(format!("{}", rgb), "#0011ff");
+    }
+
+    #[test]
+    fn test_config_source_termtint() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join(".termtint");
+        File::create(&config_path).unwrap();
+
+        let user_config = UserConfig::default();
+        let result = find_config_source(temp.path(), &user_config);
+
+        assert_eq!(result, Some(ConfigSource::Termtint(config_path)));
+    }
+
+    #[test]
+    fn test_config_source_trigger_file() {
+        let temp = TempDir::new().unwrap();
+        let trigger_path = temp.path().join("Cargo.toml");
+        File::create(&trigger_path).unwrap();
+
+        let mut user_config = UserConfig::default();
+        user_config.trigger_files = vec!["Cargo.toml".to_string()];
+
+        let result = find_config_source(temp.path(), &user_config);
+
+        assert_eq!(
+            result,
+            Some(ConfigSource::TriggerFile(temp.path().to_string_lossy().to_string()))
+        );
+    }
+
+    #[test]
+    fn test_config_source_termtint_priority() {
+        // .termtint should take priority over trigger files
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join(".termtint");
+        File::create(&config_path).unwrap();
+        let trigger_path = temp.path().join("package.json");
+        File::create(&trigger_path).unwrap();
+
+        let mut user_config = UserConfig::default();
+        user_config.trigger_files = vec!["package.json".to_string()];
+
+        let result = find_config_source(temp.path(), &user_config);
+
+        assert_eq!(result, Some(ConfigSource::Termtint(config_path)));
+    }
+
+    #[test]
+    fn test_config_source_multiple_trigger_files() {
+        let temp = TempDir::new().unwrap();
+        let trigger1 = temp.path().join("Cargo.toml");
+        File::create(&trigger1).unwrap();
+        let trigger2 = temp.path().join("package.json");
+        File::create(&trigger2).unwrap();
+
+        let mut user_config = UserConfig::default();
+        user_config.trigger_files = vec!["pyproject.toml".to_string(), "Cargo.toml".to_string(), "package.json".to_string()];
+
+        let result = find_config_source(temp.path(), &user_config);
+
+        // Should match first trigger file in the list that exists
+        assert_eq!(
+            result,
+            Some(ConfigSource::TriggerFile(temp.path().to_string_lossy().to_string()))
+        );
+    }
+
+    #[test]
+    fn test_config_source_parent_dir() {
+        let temp = TempDir::new().unwrap();
+        let trigger_path = temp.path().join("Cargo.toml");
+        File::create(&trigger_path).unwrap();
+
+        let child_dir = temp.path().join("child");
+        fs::create_dir(&child_dir).unwrap();
+
+        let mut user_config = UserConfig::default();
+        user_config.trigger_files = vec!["Cargo.toml".to_string()];
+
+        let result = find_config_source(&child_dir, &user_config);
+
+        assert_eq!(
+            result,
+            Some(ConfigSource::TriggerFile(temp.path().to_string_lossy().to_string()))
+        );
+    }
+
+    #[test]
+    fn test_config_source_none() {
+        let temp = TempDir::new().unwrap();
+        let child_dir = temp.path().join("child");
+        fs::create_dir(&child_dir).unwrap();
+
+        let mut user_config = UserConfig::default();
+        user_config.trigger_files = vec!["Cargo.toml".to_string()];
+
+        let result = find_config_source(&child_dir, &user_config);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_config_source_empty_trigger_list() {
+        let temp = TempDir::new().unwrap();
+        let trigger_path = temp.path().join("Cargo.toml");
+        File::create(&trigger_path).unwrap();
+
+        let user_config = UserConfig::default(); // empty trigger_files
+
+        let result = find_config_source(temp.path(), &user_config);
+
+        // Should find nothing since trigger_files is empty
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_config_source_termtint() {
+        let user_config = UserConfig::default();
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join(".termtint");
+        fs::write(&config_path, "#ff5500").unwrap();
+
+        let source = ConfigSource::Termtint(config_path);
+        let config = parse_config_source(&source, &user_config).unwrap();
+
+        assert_eq!(config.tab, RGB { r: 255, g: 85, b: 0 });
+        // Background uses fixed lightness (0.10 by default)
+        assert_eq!(config.background, RGB { r: 48, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn test_parse_config_source_trigger_file() {
+        let user_config = UserConfig::default();
+        let temp = TempDir::new().unwrap();
+
+        let source = ConfigSource::TriggerFile(temp.path().to_string_lossy().to_string());
+        let config = parse_config_source(&source, &user_config).unwrap();
+
+        // Should generate auto color based on directory path
+        // Verify it's a valid color with at least one bright channel
+        let max_channel = config.tab.r.max(config.tab.g).max(config.tab.b);
+        assert!(max_channel >= 128, "Generated color should be vibrant");
+    }
+
+    #[test]
+    fn test_parse_config_source_trigger_file_deterministic() {
+        let user_config = UserConfig::default();
+        let temp = TempDir::new().unwrap();
+
+        let source = ConfigSource::TriggerFile(temp.path().to_string_lossy().to_string());
+        let config1 = parse_config_source(&source, &user_config).unwrap();
+        let config2 = parse_config_source(&source, &user_config).unwrap();
+
+        // Should generate the same color for the same directory
+        assert_eq!(config1.tab, config2.tab);
+        assert_eq!(config1.background, config2.background);
+    }
+
+    #[test]
+    fn test_parse_config_source_trigger_file_different_dirs() {
+        let user_config = UserConfig::default();
+        let temp1 = TempDir::new().unwrap();
+        let temp2 = TempDir::new().unwrap();
+
+        let source1 = ConfigSource::TriggerFile(temp1.path().to_string_lossy().to_string());
+        let source2 = ConfigSource::TriggerFile(temp2.path().to_string_lossy().to_string());
+
+        let config1 = parse_config_source(&source1, &user_config).unwrap();
+        let config2 = parse_config_source(&source2, &user_config).unwrap();
+
+        // Different directories should generate different colors
+        assert_ne!(config1.tab, config2.tab);
+    }
+
+    #[test]
+    fn test_parse_config_source_uses_user_config() {
+        let mut user_config = UserConfig::default();
+        user_config.background_lightness = 0.20;
+
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join(".termtint");
+        fs::write(&config_path, "#ff5500").unwrap();
+
+        let source = ConfigSource::Termtint(config_path);
+        let config = parse_config_source(&source, &user_config).unwrap();
+
+        // Should use custom background lightness value
+        assert_eq!(config.tab, RGB { r: 255, g: 85, b: 0 });
+        // Background should use fixed lightness of 0.20
+        assert_eq!(config.background, RGB { r: 84, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn test_generate_random_color() {
+        let user_config = UserConfig::default();
+        let color = generate_random_color(&user_config);
+
+        // Convert back to HSL to verify constraints
+        let color_str = format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+        let parsed_color = csscolorparser::parse(&color_str).unwrap();
+        let [_hue, saturation, lightness, _alpha] = parsed_color.to_hsla();
+
+        // Verify saturation is within configured range (with tolerance for conversion)
+        assert!(
+            saturation >= user_config.saturation_min - 0.05,
+            "Saturation {} should be >= {}",
+            saturation,
+            user_config.saturation_min
+        );
+        assert!(
+            saturation <= user_config.saturation_max + 0.05,
+            "Saturation {} should be <= {}",
+            saturation,
+            user_config.saturation_max
+        );
+
+        // Verify lightness matches configured value (with tolerance)
+        assert!(
+            (lightness - user_config.lightness).abs() < 0.02,
+            "Lightness {} should be approximately {}",
+            lightness,
+            user_config.lightness
+        );
+    }
+
+    #[test]
+    fn test_generate_random_color_produces_different_colors() {
+        let user_config = UserConfig::default();
+
+        // Generate multiple random colors
+        let colors: Vec<RGB> = (0..10).map(|_| generate_random_color(&user_config)).collect();
+
+        // At least some should be different (highly unlikely all 10 are the same)
+        let first_color = colors[0];
+        let has_different_color = colors.iter().any(|c| *c != first_color);
+        assert!(
+            has_different_color,
+            "Should generate different random colors, but all were {:?}",
+            first_color
+        );
+    }
+
+    #[test]
+    fn test_generate_random_color_respects_custom_ranges() {
+        let mut user_config = UserConfig::default();
+        user_config.hue_min = 120.0; // Green range
+        user_config.hue_max = 180.0; // Cyan range
+        user_config.saturation_min = 0.8;
+        user_config.saturation_max = 0.9;
+        user_config.lightness = 0.6;
+
+        let color = generate_random_color(&user_config);
+
+        // Convert back to HSL to verify
+        let color_str = format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b);
+        let parsed_color = csscolorparser::parse(&color_str).unwrap();
+        let [hue, saturation, lightness, _alpha] = parsed_color.to_hsla();
+
+        // Verify hue is within configured range (with some tolerance for conversion)
+        assert!(
+            hue >= user_config.hue_min - 5.0 && hue <= user_config.hue_max + 5.0,
+            "Hue {} should be within {} to {}",
+            hue,
+            user_config.hue_min,
+            user_config.hue_max
+        );
+
+        // Verify saturation is within configured range
+        assert!(
+            saturation >= user_config.saturation_min - 0.05,
+            "Saturation {} should be >= {}",
+            saturation,
+            user_config.saturation_min
+        );
+
+        // Verify lightness matches configured value
+        assert!(
+            (lightness - user_config.lightness).abs() < 0.02,
+            "Lightness {} should be approximately {}",
+            lightness,
+            user_config.lightness
+        );
     }
 }

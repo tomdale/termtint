@@ -13,7 +13,10 @@ categories = ["command-line-utilities"]
 clap = { version = "4", features = ["derive"] }
 csscolorparser = { version = "0.7", features = ["named-colors"] }
 oklab = "1.1"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+filetime = "0.2"

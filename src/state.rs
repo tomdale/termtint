@@ -45,11 +45,19 @@ fn state_file_path() -> PathBuf {
         .join("last_config")
 }
 
+/// Type of config source.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigSourceType {
+    Explicit,   // .termtint file found
+    Triggered,  // Directory with trigger file (auto color)
+}
+
 /// State info for the last applied config.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigState {
     pub path: PathBuf,
     pub mtime: u64,
+    pub source_type: ConfigSourceType,
 }
 
 /// Read the last config state from disk, if any.
@@ -62,7 +70,15 @@ pub fn read_last_config_state() -> Option<ConfigState> {
     if path.as_os_str().is_empty() {
         return None;
     }
-    Some(ConfigState { path, mtime })
+    // Backwards compatibility: default to Explicit if not present
+    let source_type = lines.next()
+        .and_then(|line| match line.trim() {
+            "Explicit" => Some(ConfigSourceType::Explicit),
+            "Triggered" => Some(ConfigSourceType::Triggered),
+            _ => None,
+        })
+        .unwrap_or(ConfigSourceType::Explicit);
+    Some(ConfigState { path, mtime, source_type })
 }
 
 /// Get the modification time of a file as seconds since epoch.
@@ -88,11 +104,260 @@ pub fn write_last_config_state(state: Option<&ConfigState>) {
 
     match state {
         Some(s) => {
-            let content = format!("{}\n{}", s.path.to_string_lossy(), s.mtime);
+            let source_type_str = match s.source_type {
+                ConfigSourceType::Explicit => "Explicit",
+                ConfigSourceType::Triggered => "Triggered",
+            };
+            let content = format!("{}\n{}\n{}", s.path.to_string_lossy(), s.mtime, source_type_str);
             let _ = fs::write(&state_path, content.as_bytes());
         }
         None => {
             let _ = fs::remove_file(&state_path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_config_state_equality() {
+        let state1 = ConfigState {
+            path: PathBuf::from("/test/path"),
+            mtime: 12345,
+            source_type: ConfigSourceType::Explicit,
+        };
+
+        let state2 = ConfigState {
+            path: PathBuf::from("/test/path"),
+            mtime: 12345,
+            source_type: ConfigSourceType::Explicit,
+        };
+
+        assert_eq!(state1, state2);
+    }
+
+    #[test]
+    fn test_config_state_different_source_type() {
+        let state1 = ConfigState {
+            path: PathBuf::from("/test/path"),
+            mtime: 12345,
+            source_type: ConfigSourceType::Explicit,
+        };
+
+        let state2 = ConfigState {
+            path: PathBuf::from("/test/path"),
+            mtime: 12345,
+            source_type: ConfigSourceType::Triggered,
+        };
+
+        assert_ne!(state1, state2);
+    }
+
+    #[test]
+    fn test_write_and_read_state_explicit() {
+        let temp = TempDir::new().unwrap();
+        let home_str = temp.path().to_str().unwrap();
+        std::env::set_var("HOME", home_str);
+
+        let state = ConfigState {
+            path: PathBuf::from("/test/config/.termtint"),
+            mtime: 67890,
+            source_type: ConfigSourceType::Explicit,
+        };
+
+        write_last_config_state(Some(&state));
+
+        // Re-read HOME to ensure it's still set
+        std::env::set_var("HOME", home_str);
+        let read_state = read_last_config_state();
+
+        assert_eq!(read_state, Some(state));
+    }
+
+    #[test]
+    fn test_write_and_read_state_triggered() {
+        let temp = TempDir::new().unwrap();
+        let home_str = temp.path().to_str().unwrap();
+        std::env::set_var("HOME", home_str);
+
+        let state = ConfigState {
+            path: PathBuf::from("/test/project"),
+            mtime: 12345,
+            source_type: ConfigSourceType::Triggered,
+        };
+
+        write_last_config_state(Some(&state));
+
+        // Re-read HOME to ensure it's still set
+        std::env::set_var("HOME", home_str);
+        let read_state = read_last_config_state();
+
+        assert_eq!(read_state, Some(state));
+    }
+
+    #[test]
+    fn test_write_and_clear_state() {
+        let temp = TempDir::new().unwrap();
+        let home_str = temp.path().to_str().unwrap();
+        std::env::set_var("HOME", home_str);
+
+        let state = ConfigState {
+            path: PathBuf::from("/test/path"),
+            mtime: 12345,
+            source_type: ConfigSourceType::Explicit,
+        };
+
+        write_last_config_state(Some(&state));
+        std::env::set_var("HOME", home_str);
+        assert!(read_last_config_state().is_some());
+
+        write_last_config_state(None);
+        std::env::set_var("HOME", home_str);
+        assert_eq!(read_last_config_state(), None);
+    }
+
+    #[test]
+    fn test_read_nonexistent_state() {
+        let temp = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp.path());
+
+        let result = read_last_config_state();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_backwards_compatibility_missing_source_type() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join(".cache").join("termtint");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_path = state_dir.join("last_config");
+
+        // Write old format (without source_type)
+        fs::write(&state_path, "/test/path\n12345").unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let state = read_last_config_state().unwrap();
+
+        // Should default to Explicit
+        assert_eq!(state.path, PathBuf::from("/test/path"));
+        assert_eq!(state.mtime, 12345);
+        assert_eq!(state.source_type, ConfigSourceType::Explicit);
+    }
+
+    #[test]
+    fn test_read_malformed_state() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join(".cache").join("termtint");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_path = state_dir.join("last_config");
+
+        // Write malformed content
+        fs::write(&state_path, "invalid").unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let result = read_last_config_state();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_read_state_empty_path() {
+        let temp = TempDir::new().unwrap();
+        let state_dir = temp.path().join(".cache").join("termtint");
+        fs::create_dir_all(&state_dir).unwrap();
+        let state_path = state_dir.join("last_config");
+
+        // Write state with empty path
+        fs::write(&state_path, "\n12345\nExplicit").unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let result = read_last_config_state();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_get_file_mtime_exists() {
+        let temp = TempDir::new().unwrap();
+        let test_file = temp.path().join("test.txt");
+        fs::write(&test_file, "content").unwrap();
+
+        let mtime = get_file_mtime(&test_file);
+        assert!(mtime.is_some());
+        assert!(mtime.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_get_file_mtime_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let test_file = temp.path().join("nonexistent.txt");
+
+        let mtime = get_file_mtime(&test_file);
+        assert_eq!(mtime, None);
+    }
+
+    #[test]
+    fn test_state_file_path() {
+        let temp = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp.path());
+
+        let path = state_file_path();
+        assert_eq!(
+            path,
+            temp.path().join(".cache").join("termtint").join("last_config")
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_sessions() {
+        let temp = TempDir::new().unwrap();
+        let home_str = temp.path().to_str().unwrap();
+        std::env::set_var("HOME", home_str);
+
+        // Create fresh session (should not be deleted)
+        let sessions_dir = temp.path().join(".cache").join("termtint").join("sessions");
+        let fresh_session = sessions_dir.join("session1");
+        fs::create_dir_all(&fresh_session).unwrap();
+        fs::write(fresh_session.join("last_config"), "test").unwrap();
+
+        // Create stale session (should be deleted)
+        let stale_session = sessions_dir.join("session2");
+        fs::create_dir_all(&stale_session).unwrap();
+        let stale_file = stale_session.join("last_config");
+        fs::write(&stale_file, "test").unwrap();
+
+        // Set mtime to > 24 hours ago
+        let old_time = SystemTime::now() - Duration::from_secs(25 * 60 * 60);
+        let file_time = filetime::FileTime::from_system_time(old_time);
+        filetime::set_file_mtime(&stale_file, file_time).unwrap();
+
+        // Verify the mtime was actually set
+        let metadata = fs::metadata(&stale_file).unwrap();
+        let modified = metadata.modified().unwrap();
+        let age = SystemTime::now().duration_since(modified).unwrap();
+        assert!(age > Duration::from_secs(24 * 60 * 60), "File should be older than 24 hours");
+
+        std::env::set_var("HOME", home_str);
+        cleanup_stale_sessions();
+
+        // Fresh session should still exist
+        assert!(fresh_session.exists(), "Fresh session should not be deleted");
+
+        // Stale session should be deleted
+        assert!(!stale_session.exists(), "Stale session should be deleted");
+    }
+
+    #[test]
+    fn test_cleanup_stale_sessions_no_sessions_dir() {
+        let temp = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp.path());
+
+        // Should not panic when sessions dir doesn't exist
+        cleanup_stale_sessions();
     }
 }
