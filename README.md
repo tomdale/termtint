@@ -1,5 +1,7 @@
 # termtint
 
+![termtint hero image showing four terminal windows with different color themes](assets/hero.png)
+
 Terminal color theming based on directory - colorizes iTerm2 tabs and backgrounds based on `.termtint` config files.
 
 ## Installation
