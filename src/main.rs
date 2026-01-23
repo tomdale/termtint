@@ -53,6 +53,9 @@ enum Commands {
         /// Create .termtint if it doesn't exist
         #[arg(short, long)]
         force: bool,
+        /// Show directory path
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Display visual color palette and configuration
     Colors,
@@ -585,9 +588,9 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Reroll { force } => {
+        Commands::Reroll { force, verbose } => {
             let user_config = user_config::load_user_config();
-            if let Err(e) = init::cmd_reroll(force, &user_config) {
+            if let Err(e) = init::cmd_reroll(force, verbose, &user_config) {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }

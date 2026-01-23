@@ -74,12 +74,13 @@ fn render_die(value: u8, tab_color: &config::RGB, bg_color: &config::RGB) -> Str
 ///
 /// # Arguments
 /// * `force` - If true, create .termtint if it doesn't exist
+/// * `verbose` - If true, print directory path
 /// * `user_config` - User configuration for color generation
 ///
 /// # Returns
 /// * `Ok(())` if successful
 /// * `Err(String)` with error message if failed
-pub fn cmd_reroll(force: bool, user_config: &UserConfig) -> Result<(), String> {
+pub fn cmd_reroll(force: bool, verbose: bool, user_config: &UserConfig) -> Result<(), String> {
     // 1. Get current directory
     let current_dir = env::current_dir()
         .map_err(|e| format!("Error getting current directory: {}", e))?;
@@ -104,15 +105,39 @@ pub fn cmd_reroll(force: bool, user_config: &UserConfig) -> Result<(), String> {
     fs::write(&config_path, &hex_color)
         .map_err(|e| format!("Error writing .termtint file: {}", e))?;
 
-    // 6. Print success message with the generated color
-    println!("Re-rolled .termtint in {} with color {}", current_dir.display(), rgb.format_as(user_config.color_format));
+    // 6. Print success message (directory only with verbose)
+    if verbose {
+        println!("Re-rolled .termtint in {}\n", current_dir.display());
+    }
 
-    // 6a. Display dice animation
+    // 6a. Display dice with color info on the right
     let mut rng = rand::thread_rng();
     let die_value = rng.gen_range(1..=6);
     if let Ok(color_config) = config::parse_config(&config_path, user_config) {
-        println!();
-        print!("{}", render_die(die_value, &color_config.tab, &color_config.background));
+        let die_output = render_die(die_value, &color_config.tab, &color_config.background);
+        let lines: Vec<&str> = die_output.lines().collect();
+
+        for (i, line) in lines.iter().enumerate() {
+            if i == 1 {
+                // First dot row - show tab color
+                println!(
+                    "{}   Tab: {} {}",
+                    line,
+                    color_config.tab.format_as(user_config.color_format),
+                    color_config.tab.as_color_block()
+                );
+            } else if i == 2 {
+                // Second dot row - show background color
+                println!(
+                    "{}   Background: {} {}",
+                    line,
+                    color_config.background.format_as(user_config.color_format),
+                    color_config.background.as_color_block()
+                );
+            } else {
+                println!("{}", line);
+            }
+        }
     }
 
     // 7. Apply colors immediately
@@ -373,7 +398,7 @@ mod tests {
         fs::write(&config_path, "#ff5500\n").unwrap();
 
         let user_config = UserConfig::default();
-        let result = cmd_reroll(false, &user_config);
+        let result = cmd_reroll(false, false, &user_config);
         assert!(result.is_ok());
 
         // Verify file exists and contains a valid hex color
@@ -396,7 +421,7 @@ mod tests {
         env::set_current_dir(temp.path()).unwrap();
 
         let user_config = UserConfig::default();
-        let result = cmd_reroll(false, &user_config);
+        let result = cmd_reroll(false, false, &user_config);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not exist"));
 
@@ -415,7 +440,7 @@ mod tests {
         assert!(!config_path.exists());
 
         let user_config = UserConfig::default();
-        let result = cmd_reroll(true, &user_config);
+        let result = cmd_reroll(true, false, &user_config);
         assert!(result.is_ok());
 
         // Verify file was created with a valid hex color
@@ -440,7 +465,7 @@ mod tests {
         // Generate multiple colors by re-rolling
         let mut colors = Vec::new();
         for _ in 0..5 {
-            cmd_reroll(true, &user_config).unwrap();
+            cmd_reroll(true, false, &user_config).unwrap();
             let content = fs::read_to_string(&config_path).unwrap();
             colors.push(content.trim().to_string());
         }
