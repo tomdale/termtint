@@ -361,6 +361,12 @@ fn cmd_config(user_config: &user_config::UserConfig) {
     println!("  Range: 0.0 (black) to 1.0 (full brightness)");
     println!("  Default: 0.10");
 
+    // background_saturation
+    println!("\nbackground_saturation = {:.2}", user_config.background_saturation);
+    println!("  Saturation multiplier for auto-darkened backgrounds.");
+    println!("  Range: 0.0 (grayscale) to 1.0 (preserve original)");
+    println!("  Default: 1.00");
+
     // trigger_files
     if user_config.trigger_files.is_empty() {
         println!("\ntrigger_files = []");

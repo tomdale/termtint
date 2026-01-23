@@ -19,6 +19,15 @@ impl RGB {
     /// Create a version with a fixed lightness using perceptually uniform Oklab color space.
     /// Preserves hue and chroma while setting the lightness to the target value.
     pub fn with_lightness(&self, target_lightness: f32) -> RGB {
+        self.with_lightness_and_saturation(target_lightness, 1.0)
+    }
+
+    /// Create a version with adjusted lightness and saturation using Oklab color space.
+    /// The saturation_factor scales the chroma (a, b components):
+    /// - 1.0 = preserve original saturation
+    /// - 0.0 = grayscale
+    /// - 0.5 = 50% saturation
+    pub fn with_lightness_and_saturation(&self, target_lightness: f32, saturation_factor: f32) -> RGB {
         // Convert to Oklab (the crate handles sRGB u8 conversion)
         let srgb = Rgb {
             r: self.r,
@@ -26,12 +35,13 @@ impl RGB {
             b: self.b,
         };
 
-        // Convert to Oklab, set lightness to target, convert back
+        // Convert to Oklab, set lightness and scale chroma, convert back
         let oklab = srgb_to_oklab(srgb);
+        let saturation_factor = saturation_factor.clamp(0.0, 1.0);
         let modified_oklab = Oklab {
             l: target_lightness.clamp(0.0, 1.0),
-            a: oklab.a,
-            b: oklab.b,
+            a: oklab.a * saturation_factor,
+            b: oklab.b * saturation_factor,
         };
         let modified_srgb = oklab_to_srgb(modified_oklab);
 
@@ -132,10 +142,13 @@ pub fn detect_format(content: &str) -> ConfigFormat {
     }
 }
 
-/// Parse a simple color file. Derives background using configured lightness.
+/// Parse a simple color file. Derives background using configured lightness and saturation.
 fn parse_simple_color(content: &str, user_config: &UserConfig) -> Result<ColorConfig, String> {
     let tab = parse_color(content)?;
-    let background = tab.with_lightness(user_config.background_lightness);
+    let background = tab.with_lightness_and_saturation(
+        user_config.background_lightness,
+        user_config.background_saturation,
+    );
     Ok(ColorConfig { tab, background })
 }
 
@@ -155,7 +168,10 @@ fn parse_toml(content: &str, user_config: &UserConfig) -> Result<ColorConfig, St
     let background = if let Some(bg_str) = table.get("background").and_then(|v| v.as_str()) {
         parse_color(bg_str)?
     } else {
-        tab.with_lightness(user_config.background_lightness)
+        tab.with_lightness_and_saturation(
+            user_config.background_lightness,
+            user_config.background_saturation,
+        )
     };
 
     Ok(ColorConfig { tab, background })
@@ -185,7 +201,10 @@ fn parse_auto(path: &Path, user_config: &UserConfig) -> ColorConfig {
     let [r, g, b, _a] = color.to_rgba8();
 
     let tab = RGB { r, g, b };
-    let background = tab.with_lightness(user_config.background_lightness);
+    let background = tab.with_lightness_and_saturation(
+        user_config.background_lightness,
+        user_config.background_saturation,
+    );
 
     ColorConfig { tab, background }
 }
@@ -367,6 +386,42 @@ mod tests {
         let darkened = rgb.with_lightness(0.15);
         // Setting Oklab lightness to 0.15 preserves hue
         assert_eq!(darkened, RGB { r: 66, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn test_rgb_with_lightness_and_saturation_full_saturation() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        // Full saturation (1.0) should produce the same result as with_lightness
+        let result = rgb.with_lightness_and_saturation(0.15, 1.0);
+        let expected = rgb.with_lightness(0.15);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_rgb_with_lightness_and_saturation_zero_saturation() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        // Zero saturation should produce grayscale
+        let result = rgb.with_lightness_and_saturation(0.15, 0.0);
+        // Grayscale means r == g == b
+        assert_eq!(result.r, result.g);
+        assert_eq!(result.g, result.b);
+    }
+
+    #[test]
+    fn test_rgb_with_lightness_and_saturation_half_saturation() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        // Half saturation should be somewhere between full and grayscale
+        let full = rgb.with_lightness_and_saturation(0.15, 1.0);
+        let half = rgb.with_lightness_and_saturation(0.15, 0.5);
+        let zero = rgb.with_lightness_and_saturation(0.15, 0.0);
+
+        // Half saturation result should have less color difference than full
+        let full_diff = (full.r as i32 - full.g as i32).abs() + (full.g as i32 - full.b as i32).abs();
+        let half_diff = (half.r as i32 - half.g as i32).abs() + (half.g as i32 - half.b as i32).abs();
+        let zero_diff = (zero.r as i32 - zero.g as i32).abs() + (zero.g as i32 - zero.b as i32).abs();
+
+        assert!(half_diff < full_diff, "Half saturation should have less chroma than full");
+        assert!(half_diff > zero_diff, "Half saturation should have more chroma than zero");
     }
 
     #[test]

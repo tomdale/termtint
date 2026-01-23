@@ -110,6 +110,7 @@ mod tests {
             saturation_max: 0.8,
             lightness: 0.45,
             background_lightness: 0.08,
+            background_saturation: 1.0,
             trigger_files: Vec::new(),
             color_format: crate::user_config::ColorFormat::default(),
         };

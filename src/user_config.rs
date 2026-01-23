@@ -34,6 +34,7 @@ pub struct UserConfig {
     pub saturation_max: f32,
     pub lightness: f32,
     pub background_lightness: f32,
+    pub background_saturation: f32,
     pub trigger_files: Vec<String>,
     pub color_format: ColorFormat,
 }
@@ -47,6 +48,7 @@ impl Default for UserConfig {
             saturation_max: 0.9,
             lightness: 0.55,
             background_lightness: 0.10,
+            background_saturation: 1.0,
             trigger_files: Vec::new(),
             color_format: ColorFormat::default(),
         }
@@ -58,6 +60,8 @@ impl Default for UserConfig {
 struct UserConfigToml {
     #[serde(default)]
     background_lightness: Option<f32>,
+    #[serde(default)]
+    background_saturation: Option<f32>,
     #[serde(default)]
     trigger_files: Option<Vec<String>>,
     #[serde(default)]
@@ -102,6 +106,9 @@ pub fn load_user_config() -> UserConfig {
     // Apply top-level overrides
     if let Some(lightness) = toml_config.background_lightness {
         config.background_lightness = lightness;
+    }
+    if let Some(saturation) = toml_config.background_saturation {
+        config.background_saturation = saturation.clamp(0.0, 1.0);
     }
     if let Some(files) = toml_config.trigger_files {
         config.trigger_files = files;
@@ -185,6 +192,10 @@ pub fn default_config_toml() -> String {
 # Fixed lightness for darkened backgrounds (0.0 to 1.0)
 background_lightness = {:.2}
 
+# Saturation multiplier for backgrounds (0.0 to 1.0)
+# 1.0 = preserve original saturation, 0.0 = grayscale
+background_saturation = {:.2}
+
 # Files that trigger automatic color generation when found
 # Examples: ["Cargo.toml", "package.json", "go.mod", "pyproject.toml"]
 trigger_files = []
@@ -206,6 +217,7 @@ saturation_max = {:.1}
 lightness = {:.2}
 "#,
         defaults.background_lightness,
+        defaults.background_saturation,
         defaults.hue_min,
         defaults.hue_max,
         defaults.saturation_min,
@@ -229,6 +241,7 @@ mod tests {
         assert_eq!(config.saturation_max, 0.9);
         assert_eq!(config.lightness, 0.55);
         assert_eq!(config.background_lightness, 0.10);
+        assert_eq!(config.background_saturation, 1.0);
         assert!(config.trigger_files.is_empty());
     }
 
@@ -398,6 +411,7 @@ trigger_files = []
 
         // Should contain all expected sections
         assert!(toml.contains("background_lightness = 0.10"));
+        assert!(toml.contains("background_saturation = 1.00"));
         assert!(toml.contains("trigger_files = []"));
         assert!(toml.contains("[auto]"));
         assert!(toml.contains("hue_min = 0.0"));
@@ -410,6 +424,7 @@ trigger_files = []
         // Should contain helpful comments
         assert!(toml.contains("# termtint user configuration"));
         assert!(toml.contains("# Fixed lightness for darkened backgrounds"));
+        assert!(toml.contains("# Saturation multiplier for backgrounds"));
         assert!(toml.contains("# Auto color generation parameters"));
 
         // Should be valid TOML that can be parsed back
@@ -421,6 +436,7 @@ trigger_files = []
         let defaults = UserConfig::default();
 
         assert_eq!(parsed_toml.background_lightness.unwrap(), defaults.background_lightness);
+        assert_eq!(parsed_toml.background_saturation.unwrap(), defaults.background_saturation);
         assert_eq!(parsed_toml.trigger_files.unwrap(), defaults.trigger_files);
 
         let auto = parsed_toml.auto.expect("auto section should be present");
@@ -526,5 +542,46 @@ color_format = "HSL"
 
         // Should handle uppercase
         assert!(matches!(config.color_format, ColorFormat::Hsl));
+    }
+
+    #[test]
+    fn test_load_config_with_background_saturation() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let content = r#"
+background_saturation = 0.5
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        assert_eq!(config.background_saturation, 0.5);
+        // Other values should be defaults
+        assert_eq!(config.background_lightness, 0.10);
+    }
+
+    #[test]
+    fn test_load_config_background_saturation_clamped() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        // Test value above 1.0 is clamped
+        let content = r#"
+background_saturation = 2.0
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        assert_eq!(config.background_saturation, 1.0);
     }
 }
