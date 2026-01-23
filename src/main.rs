@@ -24,15 +24,12 @@ enum Commands {
     },
     /// Apply colors from config in current directory
     Apply {
-        /// Show color swatches and status messages
+        /// Show detailed config info, color swatches, and status messages
         #[arg(short, long)]
         verbose: bool,
         /// Force apply even if config is unchanged
         #[arg(short, long)]
         force: bool,
-        /// Show detailed config information including source path, format, and raw config
-        #[arg(long)]
-        info: bool,
     },
     /// Reset terminal colors to default
     Reset {
@@ -185,7 +182,7 @@ fn print_config_info(source: &config::ConfigSource, color_config: &config::Color
     eprintln!();
 }
 
-fn cmd_apply(verbose: bool, force: bool, info: bool) {
+fn cmd_apply(verbose: bool, force: bool) {
     state::cleanup_stale_sessions();
 
     let user_config = user_config::load_user_config();
@@ -226,16 +223,12 @@ fn cmd_apply(verbose: bool, force: bool, info: bool) {
     match (&current_state, &last_state) {
         // Same config source and unchanged, no change needed (skip if force is set)
         (Some(current), Some(last)) if current == last && !force => {
-            if info || verbose {
+            if verbose {
                 if let Some(source) = &config_source {
                     if let Ok(color_config) = config::parse_config_source(source, &user_config) {
-                        if info {
-                            print_config_info(source, &color_config, &user_config);
-                        }
-                        if verbose {
-                            eprintln!("termtint: (unchanged)");
-                            print_color_swatches(&color_config.tab, &color_config.background, &user_config);
-                        }
+                        print_config_info(source, &color_config, &user_config);
+                        eprintln!("termtint: (unchanged)");
+                        print_color_swatches(&color_config.tab, &color_config.background, &user_config);
                     }
                 }
             }
@@ -246,10 +239,8 @@ fn cmd_apply(verbose: bool, force: bool, info: bool) {
             if let Some(source) = &config_source {
                 match config::parse_config_source(source, &user_config) {
                     Ok(color_config) => {
-                        if info {
-                            print_config_info(source, &color_config, &user_config);
-                        }
                         if verbose {
+                            print_config_info(source, &color_config, &user_config);
                             eprintln!("termtint: applying colors");
                             print_color_swatches(&color_config.tab, &color_config.background, &user_config);
                         }
@@ -577,8 +568,8 @@ fn main() {
         Commands::Hook { shell } => {
             cmd_hook(&shell);
         }
-        Commands::Apply { verbose, force, info } => {
-            cmd_apply(verbose, force, info);
+        Commands::Apply { verbose, force } => {
+            cmd_apply(verbose, force);
         }
         Commands::Reset { verbose } => {
             cmd_reset(verbose);
