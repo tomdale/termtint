@@ -28,24 +28,36 @@ pub fn cmd_colors(user_config: &UserConfig) {
 }
 
 /// Print a visual hue spectrum using ANSI true color and Unicode blocks.
+/// Displays a 2D grid with hue on the X-axis and saturation on the Y-axis.
 fn print_hue_spectrum(user_config: &UserConfig) {
     let steps = 36;
     let hue_range = user_config.hue_max - user_config.hue_min;
-
-    // Use midpoint value for saturation and configured lightness
-    let saturation = (user_config.saturation_min + user_config.saturation_max) / 2.0;
     let lightness = user_config.lightness;
 
-    print!("  ");
-    for i in 0..steps {
-        let hue = user_config.hue_min + (i as f32 / steps as f32) * hue_range;
-        let color = csscolorparser::Color::from_hsla(hue, saturation, lightness, 1.0);
-        let [r, g, b, _a] = color.to_rgba8();
+    // Calculate 4 evenly distributed saturation values from high to low
+    let saturation_range = user_config.saturation_max - user_config.saturation_min;
+    let saturation_values = [
+        user_config.saturation_max,
+        user_config.saturation_max - saturation_range * (1.0 / 3.0),
+        user_config.saturation_max - saturation_range * (2.0 / 3.0),
+        user_config.saturation_min,
+    ];
 
-        // Print colored block using ANSI true color
-        print!("\x1b[48;2;{};{};{}m \x1b[0m", r, g, b);
+    for &saturation in &saturation_values {
+        // Print row label showing saturation percentage
+        print!("  {:>3.0}% ", saturation * 100.0);
+
+        // Print colored blocks for each hue value at this saturation
+        for i in 0..steps {
+            let hue = user_config.hue_min + (i as f32 / steps as f32) * hue_range;
+            let color = csscolorparser::Color::from_hsla(hue, saturation, lightness, 1.0);
+            let [r, g, b, _a] = color.to_rgba8();
+
+            // Print colored block using ANSI true color
+            print!("\x1b[48;2;{};{};{}m \x1b[0m", r, g, b);
+        }
+        println!();
     }
-    println!();
 }
 
 /// Print sample tab/background color pairs.
@@ -65,14 +77,14 @@ fn print_sample_pairs(user_config: &UserConfig) {
         let tab = RGB { r, g, b };
         let background = tab.with_lightness(user_config.background_lightness);
 
-        // Print colored blocks with hex values
+        // Print colored blocks with formatted color values
         print!("  Tab: ");
         print!("\x1b[48;2;{};{};{}m   \x1b[0m", tab.r, tab.g, tab.b);
-        print!(" {} ", tab);
+        print!(" {:<20}", tab.format_as(user_config.color_format));
 
         print!(" Bg: ");
         print!("\x1b[48;2;{};{};{}m   \x1b[0m", background.r, background.g, background.b);
-        print!(" {}", background);
+        print!(" {}", background.format_as(user_config.color_format));
 
         println!();
     }
@@ -99,6 +111,7 @@ mod tests {
             lightness: 0.45,
             background_lightness: 0.08,
             trigger_files: Vec::new(),
+            color_format: crate::user_config::ColorFormat::default(),
         };
         // Just verify it doesn't panic with custom config
         cmd_colors(&user_config);

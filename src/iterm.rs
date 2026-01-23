@@ -38,3 +38,11 @@ pub fn reset_colors() {
     reset_tab_color();
     reset_background_color();
 }
+
+/// Get the escape sequences for resetting colors (for verbose output).
+/// Returns (tab_reset_sequence, background_reset_sequence).
+pub fn get_reset_sequences() -> (String, String) {
+    let tab_seq = "\x1b]6;1;bg;*;default\x07".to_string();
+    let bg_seq = "\x1b]111\x07".to_string();
+    (tab_seq, bg_seq)
+}

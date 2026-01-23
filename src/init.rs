@@ -1,9 +1,74 @@
 use std::env;
 use std::fs;
 
+use rand::Rng;
+
 use crate::config;
 use crate::iterm;
 use crate::user_config::UserConfig;
+
+/// Render a die with the given value (1-6) using Unicode box-drawing characters.
+/// The die is rendered with the background color as the die face and the tab color for the dots.
+fn render_die(value: u8, tab_color: &config::RGB, bg_color: &config::RGB) -> String {
+    let bg = format!("\x1b[48;2;{};{};{}m", bg_color.r, bg_color.g, bg_color.b);
+    let fg = format!("\x1b[38;2;{};{};{}m", tab_color.r, tab_color.g, tab_color.b);
+    let reset = "\x1b[0m";
+
+    // Define dot positions for each face (using ● for dots)
+    let dots = match value {
+        1 => vec![
+            "       ",
+            "   ●   ",
+            "       ",
+        ],
+        2 => vec![
+            " ●     ",
+            "       ",
+            "     ● ",
+        ],
+        3 => vec![
+            " ●     ",
+            "   ●   ",
+            "     ● ",
+        ],
+        4 => vec![
+            " ●   ● ",
+            "       ",
+            " ●   ● ",
+        ],
+        5 => vec![
+            " ●   ● ",
+            "   ●   ",
+            " ●   ● ",
+        ],
+        6 => vec![
+            " ●   ● ",
+            " ●   ● ",
+            " ●   ● ",
+        ],
+        _ => vec![
+            "       ",
+            "   ?   ",
+            "       ",
+        ],
+    };
+
+    let mut result = String::new();
+
+    // Top border
+    result.push_str(&format!("{}{} ┌───────┐ {}\n", reset, bg, reset));
+
+    // Three rows of dots
+    for dot_row in dots {
+        result.push_str(&format!("{}{} │{}{}{}{}│ {}\n",
+            reset, bg, fg, dot_row, reset, bg, reset));
+    }
+
+    // Bottom border
+    result.push_str(&format!("{}{} └───────┘ {}\n", reset, bg, reset));
+
+    result
+}
 
 /// Re-roll the color in an existing .termtint file with a new random color.
 ///
@@ -40,7 +105,15 @@ pub fn cmd_reroll(force: bool, user_config: &UserConfig) -> Result<(), String> {
         .map_err(|e| format!("Error writing .termtint file: {}", e))?;
 
     // 6. Print success message with the generated color
-    println!("Re-rolled .termtint in {} with color {}", current_dir.display(), rgb);
+    println!("Re-rolled .termtint in {} with color {}", current_dir.display(), rgb.format_as(user_config.color_format));
+
+    // 6a. Display dice animation
+    let mut rng = rand::thread_rng();
+    let die_value = rng.gen_range(1..=6);
+    if let Ok(color_config) = config::parse_config(&config_path, user_config) {
+        println!();
+        print!("{}", render_die(die_value, &color_config.tab, &color_config.background));
+    }
 
     // 7. Apply colors immediately
     if let Ok(color_config) = config::parse_config(&config_path, user_config) {
@@ -106,29 +179,20 @@ pub fn cmd_init(
 
         // Color only: write the hex color
         (Some(c), None) => {
-            // Ensure color starts with #
-            let normalized = if c.starts_with('#') {
-                c
-            } else {
-                format!("#{}", c)
-            };
-            format!("{}\n", normalized)
+            // Parse color to RGB and use Display trait to format as hex
+            let rgb = config::parse_color(&c)
+                .map_err(|e| format!("Invalid color: {}", e))?;
+            format!("{}\n", rgb)
         }
 
         // Color + background: write TOML format
         (Some(c), Some(bg)) => {
-            // Ensure colors start with #
-            let normalized_color = if c.starts_with('#') {
-                c
-            } else {
-                format!("#{}", c)
-            };
-            let normalized_bg = if bg.starts_with('#') {
-                bg
-            } else {
-                format!("#{}", bg)
-            };
-            format!("tab = \"{}\"\nbackground = \"{}\"\n", normalized_color, normalized_bg)
+            // Parse colors to RGB and use Display trait to format as hex
+            let rgb_color = config::parse_color(&c)
+                .map_err(|e| format!("Invalid color: {}", e))?;
+            let rgb_bg = config::parse_color(&bg)
+                .map_err(|e| format!("Invalid background color: {}", e))?;
+            format!("tab = \"{}\"\nbackground = \"{}\"\n", rgb_color, rgb_bg)
         }
 
         // This case is already handled by validation above

@@ -37,7 +37,7 @@ pub fn cleanup_stale_sessions() {
 }
 
 /// Get the path to the state file.
-fn state_file_path() -> PathBuf {
+pub fn state_file_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home)
         .join(".cache")

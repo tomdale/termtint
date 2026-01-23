@@ -1,6 +1,20 @@
 use std::fs;
 use std::path::PathBuf;
 
+/// Color format for displaying colors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColorFormat {
+    Hex,
+    Hsl,
+    Rgb,
+}
+
+impl Default for ColorFormat {
+    fn default() -> Self {
+        ColorFormat::Hex
+    }
+}
+
 /// Get the path to the user config file.
 pub fn config_file_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -21,6 +35,7 @@ pub struct UserConfig {
     pub lightness: f32,
     pub background_lightness: f32,
     pub trigger_files: Vec<String>,
+    pub color_format: ColorFormat,
 }
 
 impl Default for UserConfig {
@@ -33,6 +48,7 @@ impl Default for UserConfig {
             lightness: 0.55,
             background_lightness: 0.10,
             trigger_files: Vec::new(),
+            color_format: ColorFormat::default(),
         }
     }
 }
@@ -44,6 +60,8 @@ struct UserConfigToml {
     background_lightness: Option<f32>,
     #[serde(default)]
     trigger_files: Option<Vec<String>>,
+    #[serde(default)]
+    color_format: Option<String>,
     #[serde(default)]
     auto: Option<AutoConfig>,
 }
@@ -88,6 +106,17 @@ pub fn load_user_config() -> UserConfig {
     if let Some(files) = toml_config.trigger_files {
         config.trigger_files = files;
     }
+    if let Some(format_str) = toml_config.color_format {
+        config.color_format = match format_str.to_lowercase().as_str() {
+            "hsl" => ColorFormat::Hsl,
+            "rgb" => ColorFormat::Rgb,
+            "hex" => ColorFormat::Hex,
+            _ => {
+                eprintln!("termtint: warning: invalid color_format '{}', using hex", format_str);
+                ColorFormat::Hex
+            }
+        };
+    }
 
     // Apply auto section overrides
     if let Some(auto) = toml_config.auto {
@@ -111,6 +140,41 @@ pub fn load_user_config() -> UserConfig {
     config
 }
 
+/// Save trigger files to the user config, preserving other settings.
+pub fn save_trigger_files(trigger_files: &[String]) -> Result<(), String> {
+    let config_path = config_file_path();
+
+    // Create parent directories if needed
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Error creating config directory: {}", e))?;
+    }
+
+    // Read existing config or start fresh
+    let mut table: toml::Table = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Error reading config file: {}", e))?;
+        toml::from_str(&content).unwrap_or_default()
+    } else {
+        toml::Table::new()
+    };
+
+    // Update trigger_files
+    let files_array: Vec<toml::Value> = trigger_files
+        .iter()
+        .map(|s| toml::Value::String(s.clone()))
+        .collect();
+    table.insert("trigger_files".to_string(), toml::Value::Array(files_array));
+
+    // Write back
+    let content = toml::to_string_pretty(&table)
+        .map_err(|e| format!("Error serializing config: {}", e))?;
+    fs::write(&config_path, content)
+        .map_err(|e| format!("Error writing config file: {}", e))?;
+
+    Ok(())
+}
+
 /// Generate a default config TOML string with all settings and helpful comments.
 pub fn default_config_toml() -> String {
     let defaults = UserConfig::default();
@@ -124,6 +188,9 @@ background_lightness = {:.2}
 # Files that trigger automatic color generation when found
 # Examples: ["Cargo.toml", "package.json", "go.mod", "pyproject.toml"]
 trigger_files = []
+
+# Color format for display: "hex", "hsl", or "rgb"
+# color_format = "hex"
 
 # Auto color generation parameters
 [auto]
@@ -338,6 +405,7 @@ trigger_files = []
         assert!(toml.contains("saturation_min = 0.7"));
         assert!(toml.contains("saturation_max = 0.9"));
         assert!(toml.contains("lightness = 0.55"));
+        assert!(toml.contains("color_format"));
 
         // Should contain helpful comments
         assert!(toml.contains("# termtint user configuration"));
@@ -361,5 +429,102 @@ trigger_files = []
         assert_eq!(auto.saturation_min.unwrap(), defaults.saturation_min);
         assert_eq!(auto.saturation_max.unwrap(), defaults.saturation_max);
         assert_eq!(auto.lightness.unwrap(), defaults.lightness);
+    }
+
+    #[test]
+    fn test_load_config_with_hex_format() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let content = r#"
+color_format = "hex"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        assert!(matches!(config.color_format, ColorFormat::Hex));
+    }
+
+    #[test]
+    fn test_load_config_with_hsl_format() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let content = r#"
+color_format = "hsl"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        assert!(matches!(config.color_format, ColorFormat::Hsl));
+    }
+
+    #[test]
+    fn test_load_config_with_rgb_format() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let content = r#"
+color_format = "rgb"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        assert!(matches!(config.color_format, ColorFormat::Rgb));
+    }
+
+    #[test]
+    fn test_load_config_with_invalid_format() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let content = r#"
+color_format = "invalid"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        // Should fall back to hex (default) on invalid format
+        assert!(matches!(config.color_format, ColorFormat::Hex));
+    }
+
+    #[test]
+    fn test_load_config_format_case_insensitive() {
+        let temp = TempDir::new().unwrap();
+        let config_dir = temp.path().join(".config").join("termtint");
+        fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let content = r#"
+color_format = "HSL"
+"#;
+        fs::write(&config_path, content).unwrap();
+
+        std::env::set_var("HOME", temp.path());
+
+        let config = load_user_config();
+
+        // Should handle uppercase
+        assert!(matches!(config.color_format, ColorFormat::Hsl));
     }
 }

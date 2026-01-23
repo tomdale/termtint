@@ -41,6 +41,22 @@ impl RGB {
             b: modified_srgb.b,
         }
     }
+
+    /// Format the color in the specified format.
+    pub fn format_as(&self, format: crate::user_config::ColorFormat) -> String {
+        use crate::user_config::ColorFormat;
+        match format {
+            ColorFormat::Hex => format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b),
+            ColorFormat::Rgb => format!("rgb({}, {}, {})", self.r, self.g, self.b),
+            ColorFormat::Hsl => {
+                // Convert RGB to HSL using csscolorparser
+                let hex = format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b);
+                let color = csscolorparser::parse(&hex).unwrap();
+                let [h, s, l, _a] = color.to_hsla();
+                format!("hsl({:.0}, {:.0}%, {:.0}%)", h, s * 100.0, l * 100.0)
+            }
+        }
+    }
 }
 
 impl fmt::Display for RGB {
@@ -98,14 +114,14 @@ pub enum ConfigSource {
 }
 
 #[derive(Debug, PartialEq)]
-enum ConfigFormat {
+pub enum ConfigFormat {
     SimpleColor,
     Toml,
     Auto,
 }
 
 /// Detect the format of a config file based on its content.
-fn detect_format(content: &str) -> ConfigFormat {
+pub fn detect_format(content: &str) -> ConfigFormat {
     let trimmed = content.trim();
     if trimmed == "auto" {
         ConfigFormat::Auto
@@ -546,6 +562,29 @@ mod tests {
 
         let rgb = RGB { r: 0, g: 17, b: 255 };
         assert_eq!(format!("{}", rgb), "#0011ff");
+    }
+
+    #[test]
+    fn test_rgb_format_as_hex() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        assert_eq!(rgb.format_as(crate::user_config::ColorFormat::Hex), "#ff5500");
+    }
+
+    #[test]
+    fn test_rgb_format_as_rgb() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        assert_eq!(rgb.format_as(crate::user_config::ColorFormat::Rgb), "rgb(255, 85, 0)");
+    }
+
+    #[test]
+    fn test_rgb_format_as_hsl() {
+        let rgb = RGB { r: 255, g: 85, b: 0 };
+        let result = rgb.format_as(crate::user_config::ColorFormat::Hsl);
+        // HSL for #ff5500 is approximately hsl(20, 100%, 50%)
+        assert!(result.contains("hsl("));
+        assert!(result.contains("20"));
+        assert!(result.contains("100%"));
+        assert!(result.contains("50%"));
     }
 
     #[test]
