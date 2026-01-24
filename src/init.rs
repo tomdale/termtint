@@ -16,41 +16,13 @@ fn render_die(value: u8, tab_color: &config::RGB, bg_color: &config::RGB) -> Str
 
     // Define dot positions for each face (using ● for dots)
     let dots = match value {
-        1 => vec![
-            "       ",
-            "   ●   ",
-            "       ",
-        ],
-        2 => vec![
-            " ●     ",
-            "       ",
-            "     ● ",
-        ],
-        3 => vec![
-            " ●     ",
-            "   ●   ",
-            "     ● ",
-        ],
-        4 => vec![
-            " ●   ● ",
-            "       ",
-            " ●   ● ",
-        ],
-        5 => vec![
-            " ●   ● ",
-            "   ●   ",
-            " ●   ● ",
-        ],
-        6 => vec![
-            " ●   ● ",
-            " ●   ● ",
-            " ●   ● ",
-        ],
-        _ => vec![
-            "       ",
-            "   ?   ",
-            "       ",
-        ],
+        1 => vec!["       ", "   ●   ", "       "],
+        2 => vec![" ●     ", "       ", "     ● "],
+        3 => vec![" ●     ", "   ●   ", "     ● "],
+        4 => vec![" ●   ● ", "       ", " ●   ● "],
+        5 => vec![" ●   ● ", "   ●   ", " ●   ● "],
+        6 => vec![" ●   ● ", " ●   ● ", " ●   ● "],
+        _ => vec!["       ", "   ?   ", "       "],
     };
 
     let mut result = String::new();
@@ -60,8 +32,10 @@ fn render_die(value: u8, tab_color: &config::RGB, bg_color: &config::RGB) -> Str
 
     // Three rows of dots
     for dot_row in dots {
-        result.push_str(&format!("{}{} │{}{}{}{}│ {}\n",
-            reset, bg, fg, dot_row, reset, bg, reset));
+        result.push_str(&format!(
+            "{}{} │{}{}{}{}│ {}\n",
+            reset, bg, fg, dot_row, reset, bg, reset
+        ));
     }
 
     // Bottom border
@@ -71,31 +45,23 @@ fn render_die(value: u8, tab_color: &config::RGB, bg_color: &config::RGB) -> Str
 }
 
 /// Re-roll the color in an existing .termtint file with a new random color.
+/// Creates .termtint if it doesn't exist.
 ///
 /// # Arguments
-/// * `force` - If true, create .termtint if it doesn't exist
 /// * `verbose` - If true, print directory path
 /// * `user_config` - User configuration for color generation
 ///
 /// # Returns
 /// * `Ok(())` if successful
 /// * `Err(String)` with error message if failed
-pub fn cmd_reroll(force: bool, verbose: bool, user_config: &UserConfig) -> Result<(), String> {
+pub fn cmd_reroll(verbose: bool, user_config: &UserConfig) -> Result<(), String> {
     // 1. Get current directory
-    let current_dir = env::current_dir()
-        .map_err(|e| format!("Error getting current directory: {}", e))?;
+    let current_dir =
+        env::current_dir().map_err(|e| format!("Error getting current directory: {}", e))?;
 
     let config_path = current_dir.join(".termtint");
 
-    // 2. Check if .termtint exists
-    if !config_path.exists() && !force {
-        return Err(
-            "Error: .termtint does not exist in this directory\nUse --force to create a new one"
-                .to_string(),
-        );
-    }
-
-    // 3. Generate random color
+    // 2. Generate random color
     let rgb = config::generate_random_color(user_config);
 
     // 4. Format as hex string (RGB has Display trait that outputs #rrggbb)
@@ -166,22 +132,22 @@ pub fn cmd_init(
     user_config: &UserConfig,
 ) -> Result<(), String> {
     // 1. Get current directory
-    let current_dir = env::current_dir()
-        .map_err(|e| format!("Error getting current directory: {}", e))?;
+    let current_dir =
+        env::current_dir().map_err(|e| format!("Error getting current directory: {}", e))?;
 
     let config_path = current_dir.join(".termtint");
 
     // 2. Check if .termtint exists
     if config_path.exists() && !force {
-        return Err(format!(
+        return Err(
             "Error: .termtint already exists in this directory\nUse --force to overwrite"
-        ));
+                .to_string(),
+        );
     }
 
     // 3. Validate color arg if provided
     if let Some(ref color_str) = color {
-        config::parse_color(color_str)
-            .map_err(|e| format!("Invalid color: {}", e))?;
+        config::parse_color(color_str).map_err(|e| format!("Invalid color: {}", e))?;
     }
 
     // 4. Validate background arg - requires color
@@ -193,8 +159,7 @@ pub fn cmd_init(
 
     // Validate background hex if provided
     if let Some(ref bg_str) = background {
-        config::parse_color(bg_str)
-            .map_err(|e| format!("Invalid background color: {}", e))?;
+        config::parse_color(bg_str).map_err(|e| format!("Invalid background color: {}", e))?;
     }
 
     // 5. Generate file content based on arguments
@@ -205,18 +170,16 @@ pub fn cmd_init(
         // Color only: write the hex color
         (Some(c), None) => {
             // Parse color to RGB and use Display trait to format as hex
-            let rgb = config::parse_color(&c)
-                .map_err(|e| format!("Invalid color: {}", e))?;
+            let rgb = config::parse_color(&c).map_err(|e| format!("Invalid color: {}", e))?;
             format!("{}\n", rgb)
         }
 
         // Color + background: write TOML format
         (Some(c), Some(bg)) => {
             // Parse colors to RGB and use Display trait to format as hex
-            let rgb_color = config::parse_color(&c)
-                .map_err(|e| format!("Invalid color: {}", e))?;
-            let rgb_bg = config::parse_color(&bg)
-                .map_err(|e| format!("Invalid background color: {}", e))?;
+            let rgb_color = config::parse_color(&c).map_err(|e| format!("Invalid color: {}", e))?;
+            let rgb_bg =
+                config::parse_color(&bg).map_err(|e| format!("Invalid background color: {}", e))?;
             format!("tab = \"{}\"\nbackground = \"{}\"\n", rgb_color, rgb_bg)
         }
 
@@ -225,8 +188,7 @@ pub fn cmd_init(
     };
 
     // 6. Write to .termtint file
-    fs::write(&config_path, content)
-        .map_err(|e| format!("Error writing .termtint file: {}", e))?;
+    fs::write(&config_path, content).map_err(|e| format!("Error writing .termtint file: {}", e))?;
 
     // 7. Print success message
     println!("Created .termtint in {}", current_dir.display());
@@ -381,7 +343,9 @@ mod tests {
         let user_config = UserConfig::default();
         let result = cmd_init(None, Some("#001100".to_string()), false, &user_config);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("--background requires an explicit tab color"));
+        assert!(result
+            .unwrap_err()
+            .contains("--background requires an explicit tab color"));
 
         env::set_current_dir(original_dir).unwrap();
     }
@@ -398,7 +362,7 @@ mod tests {
         fs::write(&config_path, "#ff5500\n").unwrap();
 
         let user_config = UserConfig::default();
-        let result = cmd_reroll(false, false, &user_config);
+        let result = cmd_reroll(false, &user_config);
         assert!(result.is_ok());
 
         // Verify file exists and contains a valid hex color
@@ -414,22 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reroll_fails_when_file_does_not_exist() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        let temp = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(temp.path()).unwrap();
-
-        let user_config = UserConfig::default();
-        let result = cmd_reroll(false, false, &user_config);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("does not exist"));
-
-        env::set_current_dir(original_dir).unwrap();
-    }
-
-    #[test]
-    fn test_reroll_force_creates_file() {
+    fn test_reroll_creates_file_if_missing() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let temp = TempDir::new().unwrap();
         let original_dir = env::current_dir().unwrap();
@@ -440,7 +389,7 @@ mod tests {
         assert!(!config_path.exists());
 
         let user_config = UserConfig::default();
-        let result = cmd_reroll(true, false, &user_config);
+        let result = cmd_reroll(false, &user_config);
         assert!(result.is_ok());
 
         // Verify file was created with a valid hex color
@@ -465,7 +414,7 @@ mod tests {
         // Generate multiple colors by re-rolling
         let mut colors = Vec::new();
         for _ in 0..5 {
-            cmd_reroll(true, false, &user_config).unwrap();
+            cmd_reroll(false, &user_config).unwrap();
             let content = fs::read_to_string(&config_path).unwrap();
             colors.push(content.trim().to_string());
         }

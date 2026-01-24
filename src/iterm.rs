@@ -11,10 +11,7 @@ pub fn set_tab_color(rgb: RGB) {
 /// Set the terminal background color using OSC 11.
 pub fn set_background_color(rgb: RGB) {
     // Standard OSC 11 for background color (hex format)
-    print!(
-        "\x1b]11;rgb:{:02x}/{:02x}/{:02x}\x07",
-        rgb.r, rgb.g, rgb.b
-    );
+    print!("\x1b]11;rgb:{:02x}/{:02x}/{:02x}\x07", rgb.r, rgb.g, rgb.b);
 }
 
 /// Reset the iTerm2 tab color to default.
