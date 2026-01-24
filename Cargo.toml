@@ -1,7 +1,8 @@
 [package]
 name = "termtint"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
+authors = ["Tom Dale <tom@tomdale.net>"]
 description = "Automatically colorize iTerm2 tabs and backgrounds based on directory"
 license = "MIT"
 repository = "https://github.com/tomdale/termtint"
@@ -12,6 +13,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 csscolorparser = { version = "0.7", features = ["named-colors"] }
+glob = "0.3"
 oklab = "1.1"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
