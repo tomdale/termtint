@@ -15,6 +15,17 @@ cargo test               # Run all tests
 cargo test <test_name>   # Run a single test
 ```
 
+## Documentation
+
+**Always update README.md** when making changes that affect user-facing behavior:
+
+- Adding, removing, or renaming commands
+- Adding, removing, or changing command flags
+- Changing how an existing feature works
+- Adding new features
+
+Review the README.md after such changes to ensure the documentation matches the current implementation.
+
 ## Architecture
 
 The codebase has seven modules:
@@ -26,9 +37,10 @@ The codebase has seven modules:
   - `parse_config_source()` - Parse a ConfigSource into ColorConfig
   - `detect_format()` - Determine config file format
   - `generate_random_color()` - Generate random color using user config parameters
-- **user_config.rs** - Global user configuration from `~/.config/termtint/config.toml`. Controls auto color generation parameters, background lightness, trigger files, and color display format. Supports three `ColorFormat` options: Hex, HSL, RGB. Key public functions:
+- **user_config.rs** - Global user configuration from `~/.config/termtint/config.toml`. Controls auto color generation parameters, background lightness, triggers, and color display format. Supports three `ColorFormat` options: Hex, HSL, RGB. Key public functions:
   - `load_user_config()` - Load config from file or return defaults
   - `save_trigger_files()` - Update trigger_files in config file
+  - `save_trigger_paths()` - Update trigger_paths in config file
   - `config_file_path()` - Get path to config file
   - `default_config_toml()` - Generate default config template
 - **colors.rs** - Implements the `colors` command for displaying a visual color palette with a 2D saturation grid (hue on X-axis, saturation on Y-axis) and sample tab/background pairs
@@ -41,7 +53,7 @@ The codebase has seven modules:
 
 ## Runtime Flow
 
-1. Shell hook (installed via `eval "$(termtint hook zsh)"`) calls `termtint apply` on directory change
+1. Shell hook (installed via `eval "$(termtint hook <shell>)"` for zsh/bash, or `termtint hook fish | source` for fish) calls `termtint apply` on directory change
 2. `apply` searches up from cwd for `.termtint` file OR trigger files (e.g., `Cargo.toml`)
 3. Compares against cached state to skip if unchanged
 4. Parses config, emits escape sequences, updates state
@@ -49,11 +61,11 @@ The codebase has seven modules:
 
 ## Commands
 
-- **hook** - Print shell integration code for zsh
+- **hook** - Print shell integration code (supports zsh, bash, fish)
 - **apply** - Apply colors from config (supports `--verbose`, `--force`, `--info` flags)
 - **reset** - Reset terminal colors to default (supports `--verbose` flag)
 - **init** - Create a `.termtint` file (supports optional color, `--background`, `--force`)
-- **reroll** - Re-roll to a new random color, shows ASCII dice art (supports `--force`)
+- **reroll** - Re-roll to a new random color, shows ASCII dice art (supports `--verbose`)
 - **colors** - Display visual color palette with 2D saturation grid and sample pairs
 - **config** - Show current configuration (supports `--edit`, `--path` flags)
 - **inspect** - Inspect current directory's color configuration, showing source, resolved colors, and cached state
@@ -83,6 +95,7 @@ Global settings in `~/.config/termtint/config.toml`:
 ```toml
 background_lightness = 0.10
 trigger_files = ["Cargo.toml", "package.json"]
+trigger_paths = ["~/Code/*", "~/Projects/*"]
 color_format = "hex"  # Options: "hex", "hsl", "rgb"
 
 [auto]
@@ -107,10 +120,10 @@ lightness = 0.55
 No flags. Shows current directory's config source (explicit `.termtint` or trigger file), matched trigger file if applicable, resolved colors with color blocks, and cached state information.
 
 ### trigger command
-Subcommands for managing trigger files:
-- `trigger add <filename>` - Add a file to the trigger list
-- `trigger remove <filename>` - Remove a file from the trigger list
-- `trigger list` - List all configured trigger files
+Subcommands for managing triggers (files and paths):
+- `trigger add <pattern>` - Add a trigger (file name or path glob, auto-detected)
+- `trigger remove <pattern>` - Remove a trigger from files or paths
+- `trigger list` - List all configured triggers
 
 ## Key Features
 

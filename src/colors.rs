@@ -1,6 +1,5 @@
 use crate::config::RGB;
 use crate::user_config::UserConfig;
-use csscolorparser;
 
 /// Display a visual color palette showing available auto-generated colors.
 ///
@@ -12,11 +11,64 @@ pub fn cmd_colors(user_config: &UserConfig) {
 
     // Print current configuration values
     println!("Configuration:");
-    println!("  Background lightness: {:.0}%", user_config.background_lightness * 100.0);
+    println!(
+        "  Background lightness:   {:.0}%",
+        user_config.background_lightness * 100.0
+    );
+    println!(
+        "  Background saturation:  {:.0}%",
+        user_config.background_saturation * 100.0
+    );
+    println!(
+        "  Color format:           {}",
+        match user_config.color_format {
+            crate::user_config::ColorFormat::Hex => "hex",
+            crate::user_config::ColorFormat::Hsl => "hsl",
+            crate::user_config::ColorFormat::Rgb => "rgb",
+        }
+    );
     println!("\nAuto color generation:");
-    println!("  Hue range:        {:.0}° - {:.0}°", user_config.hue_min, user_config.hue_max);
-    println!("  Saturation range: {:.0}% - {:.0}%", user_config.saturation_min * 100.0, user_config.saturation_max * 100.0);
-    println!("  Lightness:        {:.0}%", user_config.lightness * 100.0);
+    println!(
+        "  Hue range:              {:.0}° - {:.0}°",
+        user_config.hue_min, user_config.hue_max
+    );
+    println!(
+        "  Saturation range:       {:.0}% - {:.0}%",
+        user_config.saturation_min * 100.0,
+        user_config.saturation_max * 100.0
+    );
+    println!(
+        "  Lightness:              {:.0}%",
+        user_config.lightness * 100.0
+    );
+
+    // Print algorithm description
+    println!("\nHow colors are selected:");
+    println!(
+        "  Tab colors are generated in HSL color space. For auto-generated colors (trigger"
+    );
+    println!(
+        "  files or 'auto' config), hue and saturation are derived from a hash of the"
+    );
+    println!(
+        "  directory path, so the same directory always gets the same color. Lightness is"
+    );
+    println!(
+        "  fixed to ensure vibrant, readable colors."
+    );
+    println!();
+    println!(
+        "  Background colors are derived from the tab color using Oklab, a perceptually"
+    );
+    println!(
+        "  uniform color space. The lightness is reduced to the configured value while"
+    );
+    println!(
+        "  preserving the original hue. The saturation can optionally be reduced to"
+    );
+    println!(
+        "  create a more muted background that doesn't compete with terminal text."
+    );
 
     // Print hue spectrum
     println!("\nHue spectrum:");
@@ -83,7 +135,10 @@ fn print_sample_pairs(user_config: &UserConfig) {
         print!(" {:<20}", tab.format_as(user_config.color_format));
 
         print!(" Bg: ");
-        print!("\x1b[48;2;{};{};{}m   \x1b[0m", background.r, background.g, background.b);
+        print!(
+            "\x1b[48;2;{};{};{}m   \x1b[0m",
+            background.r, background.g, background.b
+        );
         print!(" {}", background.format_as(user_config.color_format));
 
         println!();
@@ -112,6 +167,7 @@ mod tests {
             background_lightness: 0.08,
             background_saturation: 1.0,
             trigger_files: Vec::new(),
+            trigger_paths: Vec::new(),
             color_format: crate::user_config::ColorFormat::default(),
         };
         // Just verify it doesn't panic with custom config
