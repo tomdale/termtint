@@ -281,7 +281,7 @@ struct FieldTemplate {
     name: &'static str,
     /// Template lines including comment and commented-out default value
     template: &'static str,
-    /// Whether this field belongs in the [auto] section
+    /// Whether this field belongs in the `[auto]` section
     in_auto_section: bool,
 }
 
@@ -343,7 +343,7 @@ const FIELD_TEMPLATES: &[FieldTemplate] = &[
 ];
 
 /// Detect which config fields are present in the content.
-/// Returns (set of field names, whether [auto] section exists, line number of [auto] header).
+/// Returns (set of field names, whether `[auto]` section exists, line number of `[auto]` header).
 fn detect_present_fields(
     content: &str,
 ) -> (std::collections::HashSet<String>, bool, Option<usize>) {

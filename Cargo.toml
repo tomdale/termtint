@@ -1,6 +1,6 @@
 [package]
 name = "termtint"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Tom Dale <tom@tomdale.net>"]
 description = "Automatically colorize iTerm2 tabs and backgrounds based on directory"
